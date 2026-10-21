@@ -131,7 +131,7 @@ class NonePendant(Pendant):
 
 
 try:
-    from . import whb04
+    from . import whb04, whb04_network
 
     WHB04_SUPPORTED = True
 except Exception as e:
@@ -148,8 +148,9 @@ if WHB04_SUPPORTED:
             self._last_jog_direction = (
                 0  # Track previous jog direction (0 = no direction, positive = CW, negative = CCW)
             )
+            self._closed = False
 
-            self._daemon = whb04.Daemon(self.executor)
+            self._daemon = self._create_daemon()
 
             self._daemon.on_connect = self._handle_connect
             self._daemon.on_disconnect = self._handle_disconnect
@@ -161,11 +162,31 @@ if WHB04_SUPPORTED:
 
             self._daemon.start()
 
+        def _create_daemon(self) -> whb04.Daemon:
+            return whb04.Daemon(self.executor)
+
+        def executor(self, f: Callable[[], None]) -> None:
+            # Drop callbacks still queued from the daemon thread after close().
+            Clock.schedule_once(lambda _: None if self._closed else f(), 0)
+
+        def close(self) -> None:
+            if self._closed:
+                return
+            self._closed = True
+            self._daemon.stop()
+
         def _handle_connect(self, daemon: whb04.Daemon) -> None:
             daemon.set_display_step_indicator(whb04.StepIndicator.STEP)
             self._report_connection()
 
         def _handle_disconnect(self, daemon: whb04.Daemon) -> None:
+            # The controller keeps a continuous jog alive by itself, so if the
+            # pendant goes away mid-jog (unplugged, WiFi dropout) we must stop
+            # it here or the machine would keep moving.
+            if self._controller.continuous_jog_active:
+                self._controller.stopContinuousJog()
+                if self._update_ui_on_jog_stop is not None:
+                    self._update_ui_on_jog_stop()
             self._report_disconnection()
 
         def _handle_display_update(self, daemon: whb04.Daemon) -> None:
@@ -392,6 +413,31 @@ if WHB04_SUPPORTED:
             )
             btn.bind(on_release=lambda *_: App.get_running_app().stop())
             popup.open()
+
+    class WHB04Network(WHB04):
+        """
+        WHB04 pendant whose USB dongle is plugged into a WHB04 Network Bridge
+        (ESP32) instead of this computer. Configured with the bridge's
+        address in the ``pendant_network_address`` setting.
+        """
+
+        def _create_daemon(self) -> whb04.Daemon:
+            address = Config.get("carvera", "pendant_network_address", fallback="")
+            try:
+                host, port = whb04_network.parse_host_port(address)
+            except ValueError as e:
+                logger.warning(f"WHB04 network pendant disabled: {e}")
+                return _IdleDaemon(self.executor)
+            return whb04_network.NetworkDaemon(host, port, self.executor)
+
+    class _IdleDaemon(whb04.Daemon):
+        """Stand-in daemon that never connects (used when no address is configured)."""
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
 
 
 class GamepadPendant(Pendant):
@@ -669,7 +715,9 @@ SUPPORTED_PENDANTS = {
 }
 
 if WHB04_SUPPORTED:
-    SUPPORTED_PENDANTS["WHB04"] = WHB04
+    if whb04.HID_AVAILABLE:
+        SUPPORTED_PENDANTS["WHB04"] = WHB04
+    SUPPORTED_PENDANTS["WHB04 (Network)"] = WHB04Network
 
 
 class SettingPendantSelector(SettingItem):

@@ -9,9 +9,19 @@ import time
 from collections.abc import Callable
 from enum import Enum
 
-import hid
-
 logger = logging.getLogger(__name__)
+
+# hidapi is only needed for the USB-attached pendant. It is not available on
+# every platform (e.g. the Android build), so make it optional: the protocol
+# decoding/encoding in this module is also used by the network transport in
+# whb04_network.py, which does not need hidapi.
+try:
+    import hid
+except Exception as e:  # ImportError, or OSError if the native library is missing
+    logger.info("hidapi not available, USB WHB04 pendant disabled: %s", e)
+    hid = None
+
+HID_AVAILABLE = hid is not None
 
 
 class _PendantPermissionError(Exception):
@@ -20,7 +30,7 @@ class _PendantPermissionError(Exception):
 
 # On Windows, the pendant is represented by two devices, meanwhile on Linux
 # the pendant is a single device. Let's abstract this away into the PendantHid class:
-if platform.system() == "Windows":
+if hid is not None and platform.system() == "Windows":
 
     class PendantHid:
         def __init__(self, devices: list[hid.DeviceInfo]) -> None:
@@ -58,7 +68,7 @@ if platform.system() == "Windows":
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.read_dev.__exit__(exc_type, exc_val, exc_tb)
             self.write_dev.__exit__(exc_type, exc_val, exc_tb)
-else:
+elif hid is not None:
 
     class PendantHid(hid.Device):
         def __init__(self, devices: list[hid.DeviceInfo]) -> None:
@@ -352,6 +362,8 @@ class Daemon:
                     self.callback_executor(lambda: self.on_disconnect(self))
 
     def _connect(self, poll_interval: float = 0.1) -> PendantHid | None:
+        if hid is None:
+            raise RuntimeError("hidapi is not available on this platform")
         while self._is_running:
             devices = [d for d in hid.enumerate() if (d["vendor_id"], d["product_id"]) in self.DEVICE_IDS]
             if devices:

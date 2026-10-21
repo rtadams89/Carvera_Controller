@@ -7315,7 +7315,8 @@ class Makera(RelativeLayout):
             )
 
         pendant_changed = any(
-            k == "pendant_type" or k.startswith("gamepad_") for k in self.controller_setting_change_list
+            k in ("pendant_type", "pendant_network_address") or k.startswith("gamepad_")
+            for k in self.controller_setting_change_list
         )
 
         if any(

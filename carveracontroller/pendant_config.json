@@ -8,13 +8,22 @@
         "default": "None"
     },
     {
+        "type": "string",
+        "title": "Network Pendant Bridge Address",
+        "desc": "IP address or hostname of the WHB04 Network Bridge, optionally followed by :port (default port 5104). Example: 192.168.1.50",
+        "section": "carvera",
+        "key": "pendant_network_address",
+        "default": "",
+        "pendant_types": ["WHB04 (Network)"]
+    },
+    {
         "type": "bool",
         "title": "Jogging Via Pendant Is Default",
         "desc": "This defines if the pendant jogging is automatically active on the jog screen",
         "section": "carvera",
         "key": "pendant_jogging_default",
         "default": "true",
-        "pendant_types": ["WHB04", "Gamepad"]
+        "pendant_types": ["WHB04", "WHB04 (Network)", "Gamepad"]
     },
     {
         "type": "bool",
@@ -23,7 +32,7 @@
         "section": "carvera",
         "key": "pendant_probe_z_alt_cmd",
         "default": "false",
-        "pendant_types": ["WHB04", "Gamepad"]
+        "pendant_types": ["WHB04", "WHB04 (Network)", "Gamepad"]
     },
     {
         "type": "options",
@@ -35,7 +44,7 @@
         "options": [
             "Macro",
             "Key-specific Action"],
-        "pendant_types": ["WHB04"]
+        "pendant_types": ["WHB04", "WHB04 (Network)"]
     },
     {
         "type": "gcodesnippet",
