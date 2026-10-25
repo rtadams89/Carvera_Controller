@@ -3,10 +3,14 @@
 import logging
 from io import BytesIO
 
+from kivy.animation import Animation
 from kivy.core.image import Image as CoreImage
-from kivy.graphics import Rectangle, RenderContext
-from kivy.properties import NumericProperty, ObjectProperty
+from kivy.graphics import Color, Line, PopMatrix, PushMatrix, Rectangle, RenderContext, Rotate
+from kivy.metrics import dp
+from kivy.properties import BooleanProperty, NumericProperty, ObjectProperty
 from kivy.uix.widget import Widget
+
+from carveracontroller.ui.theme import get_theme
 
 ADJUST_MIN = 0.2
 ADJUST_MAX = 3.0
@@ -28,6 +32,61 @@ void main(void) {
 """
 
 logger = logging.getLogger(__name__)
+
+_SPINNER_RADIUS = dp(18)
+_SPINNER_WIDTH = dp(3)
+
+
+class CameraReconnectSpinner(Widget):
+    """Dim the camera view and spin an arc while the stream is reconnecting."""
+
+    active = BooleanProperty(False)
+    angle = NumericProperty(0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            self._dim = Color(0, 0, 0, 0)
+            self._shade = Rectangle(pos=self.pos, size=self.size)
+        with self.canvas:
+            self._track_color = Color(*get_theme().text[:3], 0)
+            self._track = Line(width=_SPINNER_WIDTH)
+            PushMatrix()
+            self._rotate = Rotate(angle=0, origin=self.center)
+            self._arc_color = Color(*get_theme().text[:3], 0)
+            self._arc = Line(width=_SPINNER_WIDTH, cap="round")
+            PopMatrix()
+        self._animation = None
+        self.bind(pos=self._redraw, size=self._redraw, angle=self._redraw)
+        self.bind(active=self._on_active)
+        self._redraw()
+
+    def _on_active(self, *_args):
+        if self._animation is not None:
+            self._animation.cancel(self)
+            self._animation = None
+        if self.active:
+            self.angle = 0
+            self._animation = Animation(angle=360, duration=0.9, t="linear")
+            self._animation.repeat = True
+            self._animation.start(self)
+        else:
+            self.angle = 0
+        self._redraw()
+
+    def _redraw(self, *_args):
+        shown = bool(self.active)
+        dim = get_theme().overlay
+        self._dim.rgba = [dim[0], dim[1], dim[2], 0.45 if shown else 0.0]
+        self._shade.pos = self.pos
+        self._shade.size = self.size
+        self._track_color.a = 0.35 if shown else 0
+        self._arc_color.a = 1 if shown else 0
+        self._rotate.angle = self.angle
+        self._rotate.origin = self.center
+        center_x, center_y = self.center
+        self._track.circle = (center_x, center_y, _SPINNER_RADIUS)
+        self._arc.circle = (center_x, center_y, _SPINNER_RADIUS, 0, 280)
 
 
 class CameraView(Widget):

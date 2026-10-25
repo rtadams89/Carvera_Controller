@@ -1,0 +1,79 @@
+<IntellisensePopupBase>:
+    orientation: 'vertical'
+    size_hint: None, None
+    padding: dp(6), dp(6)
+    canvas.before:
+        Color:
+            rgba: app.theme.tooltip_bg
+        Rectangle:
+            pos: self.pos
+            size: self.size
+        Color:
+            rgba: app.theme.tooltip_border
+        Line:
+            width: app.theme.tooltip_border_width
+            rectangle: (self.x, self.y, self.width, self.height)
+
+<IntellisensePopup>:
+    padding: dp(10), dp(10)
+    ScrollView:
+        do_scroll_x: False
+        bar_width: dp(6)
+        Label:
+            id: body
+            markup: True
+            text: root.markup_text
+            size_hint_y: None
+            height: self.texture_size[1]
+            text_size: self.width, None
+            halign: 'left'
+            valign: 'top'
+            color: app.theme.text
+
+<MDICompletionPopup>:
+    BoxLayout:
+        id: body
+        orientation: 'vertical'
+        size_hint_y: 1
+    Label:
+        id: help_label
+        markup: True
+        size_hint_y: None
+        height: 0
+        opacity: 0
+        text_size: self.width, None
+        halign: 'left'
+        valign: 'top'
+        color: app.theme.text
+
+<MDISuggestionRow>:
+    orientation: 'horizontal'
+    size_hint_y: None
+    height: dp(28)
+    padding: dp(6), 0
+    spacing: dp(10)
+    canvas.before:
+        Color:
+            rgba: app.theme.selection_fill(0.35 if self.selected else 0, app.theme.revision)
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    Label:
+        size_hint_x: None
+        width: dp(88)
+        markup: True
+        text: root.highlighted_name or root.command_name
+        halign: 'left'
+        valign: 'middle'
+        text_size: self.size
+        shorten: True
+        shorten_from: 'right'
+        color: app.theme.text
+    Label:
+        text: root.summary
+        halign: 'left'
+        valign: 'middle'
+        text_size: self.size
+        shorten: True
+        shorten_from: 'right'
+        color: app.theme.text_secondary

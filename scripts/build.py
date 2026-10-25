@@ -41,6 +41,14 @@ PACKAGE_PATH = PROJECT_PATH.resolve()
 ROOT_ASSETS_PATH = ROOT_PATH.joinpath(ASSETS_FOLDER).resolve()
 
 
+def _pyinstaller_source_dest(source, dest: str) -> str:
+    """``source`` and ``dest`` joined for PyInstaller's ``--add-data`` and ``--add-binary``.
+
+    PyInstaller splits the pair on ``os.pathsep``, which is ``;`` on Windows.
+    """
+    return f"{source}{os.pathsep}{dest}"
+
+
 def build_pyinstaller_args(
     os: str,
     output_filename: str,
@@ -67,7 +75,9 @@ def build_pyinstaller_args(
         build_args += ["--icon", f"{ROOT_ASSETS_PATH.joinpath('icon-src.icns')}"]
         build_args += [
             "--add-binary",
-            f"{ROOT_ASSETS_PATH.joinpath('hidapi/macos/' + platform.machine() + '/libhidapi.dylib')}:.",
+            _pyinstaller_source_dest(
+                ROOT_ASSETS_PATH.joinpath("hidapi/macos/" + platform.machine() + "/libhidapi.dylib"), "."
+            ),
         ]
     if os == "windows":
         logger.info("Build option: onefile")
@@ -75,15 +85,33 @@ def build_pyinstaller_args(
         logger.info(f"Output file icon: {ROOT_ASSETS_PATH.joinpath('icon-src.ico')}")
         build_args += ["--icon", f"{ROOT_ASSETS_PATH.joinpath('icon-src.ico')}"]
         logger.info(f"Add hidapi.dll binary: {ROOT_ASSETS_PATH.joinpath('hidapi/windows/hidapi.dll')}")
-        build_args += ["--add-binary", f"{ROOT_ASSETS_PATH.joinpath('hidapi/windows/hidapi.dll')}:."]
+        build_args += [
+            "--add-binary",
+            _pyinstaller_source_dest(ROOT_ASSETS_PATH.joinpath("hidapi/windows/hidapi.dll"), "."),
+        ]
         logger.info("Add win32timezone to hidden imports")
         build_args += ["--hiddenimport", "win32timezone"]
     else:
         logger.info(f"Output file icon: {ROOT_ASSETS_PATH.joinpath('icon-src.png')}")
         build_args += ["--icon", f"{ROOT_ASSETS_PATH.joinpath('icon-src.png')}"]
 
+    logger.info("Collect libusb and pyusb backend")
+    build_args += [
+        "--collect-all",
+        "libusb_package",
+        "--hiddenimport",
+        "usb",
+        "--hiddenimport",
+        "usb.backend.libusb1",
+        "--hiddenimport",
+        "carveracontroller.addons.stock.simulator.native.lib._stock_carve",
+    ]
+
     logger.info(f"Add bundled package assets: {PACKAGE_PATH}")
-    build_args += ["--add-data", f"{PACKAGE_PATH}:carveracontroller"]
+    build_args += ["--add-data", _pyinstaller_source_dest(PACKAGE_PATH, "carveracontroller")]
+    fonts_path = ROOT_PATH / "assets" / "fonts"
+    logger.info(f"Add bundled fonts: {fonts_path}")
+    build_args += ["--add-data", _pyinstaller_source_dest(fonts_path, "assets/fonts")]
 
     logger.info("Build options: noconsole, noconfirm, noupx, clean")
     build_args += [
@@ -595,6 +623,8 @@ def main():
 
     ######### Run PyInstaller for all os expcept those that don't use it #########
     if os_name not in ("ios", "pypi", "android"):
+        logger.info("Compiling native stock carve extension")
+        subprocess.run([sys.executable, str(BUILD_PATH / "build_native.py")], check=True)
         build_args = build_pyinstaller_args(
             os=os_name,
             output_filename=output_filename,

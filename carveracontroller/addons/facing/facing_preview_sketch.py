@@ -16,8 +16,62 @@ from kivy.graphics import (
 )
 from kivy.uix.widget import Widget
 
+from carveracontroller.ui.theme import get_theme, watch_theme
+
 from .facing_gcode import FacingEnvelope
 from .probe_grid_gcode import ProbeGridGeometry
+
+_PREVIEW_POINT_BUDGET = 2000
+# sin of heading change; ~3° so 90° envelope corners are kept, dense collinear
+# samples on a wall are not.
+_PREVIEW_CORNER_SIN = 0.05
+
+
+def _preview_vertex_is_corner(
+    prev: tuple[float, float],
+    p: tuple[float, float],
+    nxt: tuple[float, float],
+) -> bool:
+    ax, ay = p[0] - prev[0], p[1] - prev[1]
+    bx, by = nxt[0] - p[0], nxt[1] - p[1]
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la < 1e-12 or lb < 1e-12:
+        return True
+    return abs(ax * by - ay * bx) / (la * lb) > _PREVIEW_CORNER_SIN
+
+
+def decimate_preview_polyline(
+    pts: list[tuple[float, float]],
+    max_points: int = _PREVIEW_POINT_BUDGET,
+) -> list[tuple[float, float]]:
+    """Thin a polyline by arc length without skipping corners.
+
+    Index striding (keep every Nth vertex) turns a 4-corner outer loop into a
+    diagonal across the facing area. Arc-length sampling alone can still skip a
+    90° corner when a long collapsed wall follows a short leftover on the
+    previous edge.
+    """
+    n = len(pts)
+    if n <= 2 or n <= max_points:
+        return pts
+    total = 0.0
+    for a, b in zip(pts, pts[1:]):
+        total += math.hypot(b[0] - a[0], b[1] - a[1])
+    spacing = total / max(max_points - 1, 1)
+    if spacing <= 1e-9:
+        return pts
+    out: list[tuple[float, float]] = [pts[0]]
+    acc = 0.0
+    for i in range(1, n):
+        acc += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        is_last = i == n - 1
+        corner = (not is_last) and _preview_vertex_is_corner(pts[i - 1], pts[i], pts[i + 1])
+        if acc >= spacing or corner or is_last:
+            if out[-1] != pts[i]:
+                out.append(pts[i])
+            acc = 0.0
+    return out
 
 
 class FacingXYPreviewSketch(Widget):
@@ -26,16 +80,18 @@ class FacingXYPreviewSketch(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.bind(pos=self._redraw, size=self._redraw)
+        self._stop_theme = watch_theme(lambda _theme: self._redraw())
 
     def _redraw(self, *args):
         self.canvas.clear()
+        theme = get_theme()
         iw = max(self.width, 1.0)
         ih = max(self.height, 1.0)
 
         with self.canvas:
             PushMatrix()
             Translate(self.x, self.y)
-            Color(0.12, 0.12, 0.13, 1)
+            Color(*theme.sketch_bg)
             Rectangle(pos=(0, 0), size=(iw, ih))
 
             g = getattr(self, "_geom", None)
@@ -51,6 +107,7 @@ class FacingXYPreviewSketch(Widget):
                     PopMatrix()
                 else:
                     self._draw_geometry_inner(
+                        theme,
                         iw,
                         ih,
                         stock_rect,
@@ -65,6 +122,7 @@ class FacingXYPreviewSketch(Widget):
 
     def _draw_geometry_inner(
         self,
+        theme,
         iw: float,
         ih: float,
         stock_rect,
@@ -104,25 +162,25 @@ class FacingXYPreviewSketch(Widget):
             # Kivy Line(dash_length=…) seems to be unreliable, draw dashes explicitly.
             dash_px = max(5.0, abs(scale) * 1.15)
             gap_px = max(3.0, abs(scale) * 0.75)
-            Color(0.48, 0.48, 0.5, 0.75)
+            Color(*theme.facing_machining_dash)
             for a, b in ((p_bl, p_br), (p_br, p_tr), (p_tr, p_tl), (p_tl, p_bl)):
                 for seg in self._dash_segment_pairs(a, b, dash_px, gap_px):
                     Line(points=seg, width=1)
 
         flat_stock = self._rect_line(nx0, ny0, nx1, ny1, px)
-        Color(0.62, 0.62, 0.65, 1)
+        Color(*theme.facing_stock)
         Line(points=flat_stock, width=1.75)
 
         if probe_geom is not None:
             gx0, gx1 = probe_geom.inset_x0, probe_geom.inset_x1
             gy0, gy1 = probe_geom.inset_y0, probe_geom.inset_y1
-            Color(0.35, 0.55, 0.85, 1)
+            Color(*theme.facing_probe_grid)
             Line(
                 points=self._rect_line(gx0, gy0, gx1, gy1, px),
                 width=1,
             )
             pr = max(scale * 0.35, 1.5)
-            Color(0.45, 0.65, 0.95, 1)
+            Color(*theme.facing_probe_point)
             for wy in probe_geom.ys:
                 for wx in probe_geom.xs:
                     cxp, cyp = px(wx, wy)
@@ -135,7 +193,7 @@ class FacingXYPreviewSketch(Widget):
                 facing.facing_xb,
                 facing.facing_yb,
             )
-            Color(0.92, 0.35, 0.28, 1)
+            Color(*theme.facing_area)
             Line(
                 points=self._rect_line(fx0, fy0, fx1, fy1, px),
                 width=1.5,
@@ -143,12 +201,10 @@ class FacingXYPreviewSketch(Widget):
 
         if toolpath:
             flat = []
-            step = max(1, len(toolpath) // 400)
-            for i in range(0, len(toolpath), step):
-                x, y = toolpath[i]
+            for x, y in decimate_preview_polyline(toolpath):
                 qx, qy = px(x, y)
                 flat.extend([qx, qy])
-            Color(0.95, 0.72, 0.35, 0.65)
+            Color(*theme.facing_toolpath)
             Line(points=flat, width=1)
 
         ox0, oy0 = px(0.0, 0.0)
@@ -159,13 +215,13 @@ class FacingXYPreviewSketch(Widget):
         ox_x, oy_x = px(arm_x, 0.0)
         ox_y, oy_y = px(0.0, arm_y)
         orad = max(min(scale * 1.1, 8.0), 4.5)
-        Color(0.93, 0.93, 0.96, 0.95)
+        Color(*theme.facing_origin_outer)
         Ellipse(pos=(ox0 - orad, oy0 - orad), size=(2 * orad, 2 * orad))
-        Color(0.22, 0.22, 0.24, 1)
+        Color(*theme.facing_origin_inner)
         Ellipse(pos=(ox0 - orad * 0.35, oy0 - orad * 0.35), size=(orad * 0.7, orad * 0.7))
-        Color(0.35, 0.78, 0.42, 1)
+        Color(*theme.facing_axis_x)
         Line(points=[ox0, oy0, ox_x, oy_x], width=2.8)
-        Color(0.95, 0.55, 0.28, 1)
+        Color(*theme.facing_axis_y)
         Line(points=[ox0, oy0, ox_y, oy_y], width=2.8)
 
     @staticmethod

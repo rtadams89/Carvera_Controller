@@ -36,7 +36,7 @@ void main()
     if (vertex_id < 0.0) {
         gl_Position = proj_mat * view_mat * center_offset * world_pos;
     } else {
-        gl_Position = proj_mat * view_mat * rotation_mat * center_offset * world_pos;
+        gl_Position = proj_mat * view_mat * center_offset * rotation_mat * world_pos;
     }
 }
 
@@ -52,6 +52,12 @@ varying float vs_vertex_z;
 
 // Kivy uniforms are float-only; -1 means show the full toolpath
 uniform float display_count;
+// Ghost: path_alpha is the floor; path_alpha_recent is the playhead peak.
+// When they differ, alpha ramps up over the last path_fade_span of path_fade_now.
+uniform float path_alpha;
+uniform float path_alpha_recent;
+uniform float path_fade_now;
+uniform float path_fade_span;
 // 0 = move type, 1 = tool, 2 = feed speed, 3 = Z height
 uniform float color_scheme;
 uniform float feed_min;
@@ -78,31 +84,47 @@ uniform vec4 tool_ids3;
 uniform vec4 tool_ids4;
 uniform vec4 tool_ids5;
 
+// Live theme RGB (tool_color_1..10, speed_colormap_1..4). Ladder, not an array index.
+uniform vec3 tool_color0;
+uniform vec3 tool_color1;
+uniform vec3 tool_color2;
+uniform vec3 tool_color3;
+uniform vec3 tool_color4;
+uniform vec3 tool_color5;
+uniform vec3 tool_color6;
+uniform vec3 tool_color7;
+uniform vec3 tool_color8;
+uniform vec3 tool_color9;
+uniform vec3 speed_color0;
+uniform vec3 speed_color1;
+uniform vec3 speed_color2;
+uniform vec3 speed_color3;
+
 vec3 tool_palette_color(float idx)
 {
     float i = mod(floor(idx + 0.5), 10.0);
-    if (abs(i - 0.0) < 0.5) return vec3(0.406684, 0.735902, 0.235489);
-    if (abs(i - 1.0) < 0.5) return vec3(0.000000, 0.459774, 0.840728);
-    if (abs(i - 2.0) < 0.5) return vec3(0.779915, 0.319537, 0.130857);
-    if (abs(i - 3.0) < 0.5) return vec3(0.740127, 0.236840, 0.700182);
-    if (abs(i - 4.0) < 0.5) return vec3(0.000000, 0.755849, 0.602221);
-    if (abs(i - 5.0) < 0.5) return vec3(0.825216, 0.043248, 0.043248);
-    if (abs(i - 6.0) < 0.5) return vec3(0.894806, 0.717161, 0.000000);
-    if (abs(i - 7.0) < 0.5) return vec3(0.128923, 0.578319, 0.877916);
-    if (abs(i - 8.0) < 0.5) return vec3(0.431518, 0.268501, 0.839063);
-    return vec3(0.248716, 0.777237, 0.402157);
+    if (abs(i - 0.0) < 0.5) return tool_color0;
+    if (abs(i - 1.0) < 0.5) return tool_color1;
+    if (abs(i - 2.0) < 0.5) return tool_color2;
+    if (abs(i - 3.0) < 0.5) return tool_color3;
+    if (abs(i - 4.0) < 0.5) return tool_color4;
+    if (abs(i - 5.0) < 0.5) return tool_color5;
+    if (abs(i - 6.0) < 0.5) return tool_color6;
+    if (abs(i - 7.0) < 0.5) return tool_color7;
+    if (abs(i - 8.0) < 0.5) return tool_color8;
+    return tool_color9;
 }
 
 vec3 speed_colormap(float t)
 {
     t = clamp(t, 0.0, 1.0);
     if (t < 0.33) {
-        return mix(vec3(0.2, 0.4, 0.9), vec3(0.1, 0.7, 0.5), t / 0.33);
+        return mix(speed_color0, speed_color1, t / 0.33);
     }
     if (t < 0.66) {
-        return mix(vec3(0.1, 0.7, 0.5), vec3(0.95, 0.85, 0.15), (t - 0.33) / 0.33);
+        return mix(speed_color1, speed_color2, (t - 0.33) / 0.33);
     }
-    return mix(vec3(0.95, 0.85, 0.15), vec3(0.9, 0.25, 0.2), (t - 0.66) / 0.34);
+    return mix(speed_color2, speed_color3, (t - 0.66) / 0.34);
 }
 
 float tool_id_at(int i)
@@ -242,5 +264,12 @@ void main()
         float t = clamp((vs_vertex_z - z_min) / span, 0.0, 1.0);
         color = speed_colormap(t);
     }
-    gl_FragColor = vec4(color, 1.0) * texture2D(texture0, tex_coord0);
+    float alpha = path_alpha;
+    if (path_alpha_recent - path_alpha > 0.001 && path_fade_span > 1e-6) {
+        float t = clamp(1.0 - (path_fade_now - vs_distance_id) / path_fade_span, 0.0, 1.0);
+        // Cubic keep older path near the floor until close to the playhead.
+        t = t * t * t;
+        alpha = mix(path_alpha, path_alpha_recent, t);
+    }
+    gl_FragColor = vec4(color, alpha) * texture2D(texture0, tex_coord0);
 }

@@ -40,7 +40,7 @@ To contribute to this project or set up a local development environment, follow 
 * One of the python dependencies [QuickLZ](https://pypi.org/project/pyquicklz/) will be compiled by Poetry when installed. Ensure that you have a compiler that Poetry/Pip can use and the Python headers. On a debian based Linux system this can be accomplished with `sudo apt-get install -y python3-dev build-essential`. On Windows installation of (just) the Visual C++ 14.x compiler is required, this can be accomplished with [MSBuild tools package](https://aka.ms/vs/17/release/vs_BuildTools.exe).
 * [Squashfs-tools](https://github.com/plougher/squashfs-tools) is required if building Linux AppImages. On Debian based systems it's provided by the package `squashfs-tools`. This is only required if packaging for linux.
 * [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) is required for building Linux AppImages. These must be installed and available in your PATH before building. You can install them using `scripts/install_linux_prereqs.sh` or by following the instructions on their GitHub page.
-* [gettext](https://www.gnu.org/software/gettext/) is required for language file generation. [gettext-iconv-windows](https://mlocati.github.io/articles/gettext-iconv-windows.html) project has a version with Windows packages.
+* [gettext](https://www.gnu.org/software/gettext/) is required for language file generation. [gettext-iconv-windows](https://mlocati.github.io/articles/gettext-iconv-windows.html) project has a version with Windows packages. If gettext/msgfmt are unavailiable translation compilation will be skipped.
 * For building iOS app, you need a working XCode installation as well as the build tool that can be installed with `brew install autoconf automake libtool pkg-config`
 * Building the Android app needs a Linux host. The prerequisites can be found here: [buildozer prerequisites](https://buildozer.readthedocs.io/en/latest/installation.html). A script to install them is provided in `scripts/install_android_prereqs.sh`. Be aware that buildozer downloads/installs multiple GB of Android development tooling.
 
@@ -101,6 +101,16 @@ poetry run python -m carveracontroller
 ```
 
 To run the iOS app, you first need to build its dependencies using the Local Packaging instructions below. The build script will open Xcode for you, or you can open the project manually by finding it in `assets/packaging/ios/carveracontroller-ios`.
+
+### Native stock simulation
+
+The stock cut simulation relies on a small C extension (`_stock_carve`, sources in `carveracontroller/addons/stock/simulator/native`) to carve the tool moves into the stock model and to generate its meshes. It is not compiled by `poetry install`, so when running from source the cut simulation stays unavailable until you build it. Ensure that you have a C compiler and the Python headers (see the Prerequisites above), then run:
+
+```bash
+poetry run python scripts/build_native.py
+```
+
+The compiled library is written in-place to `carveracontroller/addons/stock/simulator/native/lib`. Re-run the script after changing any of the `.c` or `.h` files. The packaging script (`scripts/build.py`) and the quality workflow already do this for you, and the tests that exercise the simulator are skipped if the extension has not been built.
 
 ### Quality Checks
 

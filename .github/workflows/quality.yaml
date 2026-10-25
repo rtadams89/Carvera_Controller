@@ -43,5 +43,8 @@ jobs:
       - name: Run quality hooks
         run: poetry run pre-commit run --all-files
 
+      - name: Build native carve extension
+        run: poetry run python scripts/build_native.py
+
       - name: Run tests
         run: xvfb-run -a -s "-screen 0 1920x1080x24 -nolisten tcp" poetry run python -m pytest tests

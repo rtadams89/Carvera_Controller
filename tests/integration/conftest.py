@@ -183,20 +183,21 @@ def kivy_app():
     from carveracontroller.translation import tr
 
     # Replicate main() startup sequence (main.py:6470-6494)
-    translation.init(None)
+    translation.init("en")
     load_constants()
     set_config_defaults(tr.lang)
     load_app_configs()
 
     # Suppress hardware access and network requests AFTER config sections exist
     Config.set("carvera", "show_update", "0")
+    Config.set("carvera", "tutorial_completed", "1")
     Config.set("carvera", "address", "")
     Config.set("carvera", "pendant_type", "None")
 
     main_module.HALT_REASON = load_halt_translations(tr)
 
     base_path = app_base_path()
-    register_fonts(base_path)
+    register_fonts()
     register_images(base_path)
 
     # Create the app and build its widget tree without entering the event loop

@@ -1,0 +1,89 @@
+#:import tr carveracontroller.__main__.tr
+
+<SimStatsHudIcon>:
+    size_hint: None, None
+    size: dp(22), dp(28)
+
+<CarveSpinner>:
+    size_hint: None, None
+    width: dp(16) if self.spinning else 0
+    height: dp(16)
+    line_rgba: app.theme.active_color
+
+<SimStatsHud>:
+    orientation: 'vertical'
+    size_hint: None, None
+    size: self.minimum_size
+    padding: 0, 0, 0, dp(8)
+    spacing: 0
+    opacity: 1 if self.hud_visible and app.show_gcode_ctl_bar else 0
+    disabled: not self.hud_visible or not app.show_gcode_ctl_bar
+    canvas.before:
+        Color:
+            rgba: app.theme.viewer_hud_bg
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(app.theme.radius_m),]
+    canvas.after:
+        Color:
+            rgba: app.theme.border[0], app.theme.border[1], app.theme.border[2], .45
+        Line:
+            width: dp(1)
+            rounded_rectangle: (self.x + dp(0.5), self.y + dp(0.5), max(0, self.width - dp(1)), max(0, self.height - dp(1)), dp(app.theme.radius_m))
+    BoxLayout:
+        size_hint_y: None
+        height: dp(36)
+        # Fill the panel, but let the panel width come from content minimums.
+        size_hint_min_x: self.minimum_width
+        spacing: dp(8)
+        padding: dp(10), dp(4)
+        canvas.after:
+            Color:
+                rgba: app.theme.border[0], app.theme.border[1], app.theme.border[2], .4
+            Rectangle:
+                pos: self.x + dp(10), self.y
+                size: max(0, self.width - dp(20)), dp(1)
+        Image:
+            source: 'data/GcodeViewer/stock.png'
+            size_hint: None, None
+            size: dp(18), dp(18)
+            allow_stretch: True
+            keep_ratio: True
+            color: app.theme.icon
+            pos_hint: {'center_y': 0.5}
+        Label:
+            text: tr._('Simulation')
+            size_hint: None, None
+            size: self.texture_size
+            font_size: '14sp'
+            color: app.theme.text
+            pos_hint: {'center_y': 0.5}
+        CarveSpinner:
+            spinning: root.carving
+            pos_hint: {'center_y': 0.5}
+        Widget:
+            size_hint_x: 1
+        SimStatsHudIcon:
+            icon_source: 'data/cog.png'
+            tooltip_txt: tr._('Stock settings')
+            pos_hint: {'center_y': 0.5}
+            on_release: app.root.open_stock_settings_popup()
+        SimStatsHudIcon:
+            icon_source: 'data/eye.png'
+            icon_active: root.mesh_visible
+            tooltip_txt: tr._('Hide simulation') if root.mesh_visible else tr._('Show simulation')
+            pos_hint: {'center_y': 0.5}
+            on_release: app.root.gcode_viewer.set_sim_mesh_visible(not root.mesh_visible)
+    BoxLayout:
+        size_hint: None, None
+        size: self.minimum_size
+        padding: dp(8), dp(4), dp(8), 0
+        Label:
+            size_hint: None, None
+            size: self.texture_size
+            text: root.stats_text
+            font_size: '13sp'
+            color: app.theme.text
+            halign: 'left'
+            valign: 'top'

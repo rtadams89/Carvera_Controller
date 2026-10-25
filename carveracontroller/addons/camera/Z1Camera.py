@@ -8,7 +8,8 @@ at 640x480 by that firmware and exposes no sensor controls, which is why
 ``CameraView`` grades frames on the host instead.
 
 Frames are read on a worker thread; callbacks are dispatched on the Kivy main
-thread.
+thread. A dropped socket does not end the session: the worker reconnects until
+``stop`` closes it.
 """
 
 import json
@@ -28,7 +29,6 @@ from carveracontroller.addons.camera.websocket import (
     OP_TEXT,
     WebSocketClient,
 )
-from carveracontroller.translation import tr
 
 CAMERA_PORT = 82
 CAMERA_PATH = "/ws_video"
@@ -46,6 +46,10 @@ PROBE_TIMEOUT = 1.5
 CONTROL_TIMEOUT = 5.0
 # Reads are sliced so a stop request is not left hanging between frames.
 READ_TIMEOUT = 1.0
+# Pause after a dropped socket before dialing again. Short enough that a brief
+# Wi-Fi blip recovers while the panel is still open, long enough to avoid
+# hammering a camera that is actually down.
+RECONNECT_DELAY = 1.0
 
 # Espressif framesize_t values, each measured against a Z1. Frame rate falls off
 # as they climb -- 640x480 runs at about 20fps and 1600x1200 at about 10 -- so
@@ -112,17 +116,22 @@ def set_resolution(host, value):
 class Z1Camera:
     """Owns the reader thread for one camera session.
 
-    ``on_frame`` receives complete JPEG bytes, ``on_streaming`` the current
-    streaming state and ``on_error`` a user-facing message.
+    ``on_frame`` receives complete JPEG bytes and ``on_streaming`` the current
+    streaming state. ``on_reconnecting`` is true from a dropped socket until the
+    next frame arrives. The session stays live across those drops so the panel
+    can stay open; ``stop`` is what ends it.
     """
 
-    def __init__(self, on_frame, on_streaming, on_error):
+    def __init__(self, on_frame, on_streaming, on_reconnecting):
         self._on_frame = on_frame
         self._on_streaming = on_streaming
-        self._on_error = on_error
+        self._on_reconnecting = on_reconnecting
         self._client = None
         self._streaming = False
+        self._reconnecting = False
         self._session = 0
+        self._stop_event = threading.Event()
+        self._reader = None
         self._latest_frame = None
         self._frame_update = None
 
@@ -134,8 +143,11 @@ class Z1Camera:
             return
         self._session += 1
         self._streaming = True
+        self._stop_event.clear()
+        self._set_reconnecting(False)
         self._notify(self._on_streaming, True)
-        threading.Thread(target=self._read_frames, args=(host, self._session), daemon=True).start()
+        self._reader = threading.Thread(target=self._read_frames, args=(host, self._session), daemon=True)
+        self._reader.start()
 
     def stop(self):
         """Invalidate the running worker's session, then close its connection."""
@@ -143,59 +155,87 @@ class Z1Camera:
             return
         self._session += 1
         self._streaming = False
+        self._stop_event.set()
         client, self._client = self._client, None
         if client is not None:
             client.close()
+        self._set_reconnecting(False)
         self._notify(self._on_streaming, False)
 
     def _read_frames(self, host, session):
-        """Forward frames until stopped, closed, or superseded by a newer session.
+        """Forward frames until stopped, or reconnect when the socket drops.
 
         Only the local ``client`` is used, so a newer session replacing
-        ``self._client`` can neither be read nor torn down here.
+        ``self._client`` can neither be read nor torn down here. A failure
+        while this session is still current retries instead of ending the
+        stream, which would collapse the camera panel.
         """
-        client = None
-        try:
-            client = WebSocketClient(
-                host, CAMERA_PORT, CAMERA_PATH, handshake_timeout=CONNECT_TIMEOUT, read_timeout=READ_TIMEOUT
-            )
-            self._client = client
-            client.send(OP_TEXT, START_MESSAGE)
-            logger.info("Camera stream connected: %s:%d%s", host, CAMERA_PORT, CAMERA_PATH)
-            pending = bytearray()
-            while self._streaming and self._session == session:
-                try:
-                    frame = client.read_frame()
-                except socket.timeout:
-                    continue
-                if frame.opcode == OP_CLOSE:
-                    raise CameraStreamClosed
-                if frame.opcode == OP_PING:
-                    client.send(OP_PONG, frame.payload)
-                    continue
-                if frame.opcode == OP_BINARY:
-                    pending = bytearray(frame.payload)
-                elif frame.opcode == OP_CONTINUATION and pending:
-                    pending += frame.payload
-                else:
-                    # Text messages, and continuations of something we skipped.
-                    continue
-                if frame.fin:
-                    self._show_frame(bytes(pending))
+        while self._streaming and self._session == session:
+            client = None
+            retry = False
+            try:
+                client = WebSocketClient(
+                    host, CAMERA_PORT, CAMERA_PATH, handshake_timeout=CONNECT_TIMEOUT, read_timeout=READ_TIMEOUT
+                )
+                if self._streaming and self._session == session:
+                    self._client = client
+                    client.send(OP_TEXT, START_MESSAGE)
+                    logger.info("Camera stream connected: %s:%d%s", host, CAMERA_PORT, CAMERA_PATH)
                     pending = bytearray()
-        except CameraStreamClosed:
-            logger.info("Camera stream closed by the machine")
-        except OSError as exc:
-            if self._streaming and self._session == session:
-                logger.error("Camera stream failed: %s", exc)
-                self._notify(self._on_error, tr._("Camera stream error: {}").format(exc))
-        finally:
-            if client is not None:
-                client.close()
-            if self._session == session:
-                self._client = None
-                self._streaming = False
-                self._notify(self._on_streaming, False)
+                    while self._streaming and self._session == session:
+                        try:
+                            frame = client.read_frame()
+                        except socket.timeout:
+                            continue
+                        if frame.opcode == OP_CLOSE:
+                            raise CameraStreamClosed
+                        if frame.opcode == OP_PING:
+                            client.send(OP_PONG, frame.payload)
+                            continue
+                        if frame.opcode == OP_BINARY:
+                            pending = bytearray(frame.payload)
+                        elif frame.opcode == OP_CONTINUATION and pending:
+                            pending += frame.payload
+                        else:
+                            # Text messages, and continuations of something we skipped.
+                            continue
+                        if frame.fin:
+                            self._set_reconnecting(False)
+                            self._show_frame(bytes(pending))
+                            pending = bytearray()
+            except CameraStreamClosed:
+                logger.info("Camera stream closed by the machine")
+                retry = self._streaming and self._session == session
+            except OSError as exc:
+                if self._streaming and self._session == session:
+                    logger.error("Camera stream failed: %s", exc)
+                    retry = True
+            except Exception:
+                # Anything else used to kill the reader and leave the panel
+                # open with _streaming still true, so start() would not run again.
+                if self._streaming and self._session == session:
+                    logger.exception("Camera stream failed")
+                    retry = True
+            finally:
+                if client is not None:
+                    client.close()
+                if self._client is client:
+                    self._client = None
+            if not retry:
+                break
+            self._set_reconnecting(True)
+            self._stop_event.wait(RECONNECT_DELAY)
+        if self._session == session:
+            self._client = None
+            self._streaming = False
+            self._set_reconnecting(False)
+            self._notify(self._on_streaming, False)
+
+    def _set_reconnecting(self, reconnecting):
+        if self._reconnecting == reconnecting:
+            return
+        self._reconnecting = reconnecting
+        self._notify(self._on_reconnecting, reconnecting)
 
     def _show_frame(self, jpeg):
         """Hand the newest frame to the UI, replacing any not drawn yet.

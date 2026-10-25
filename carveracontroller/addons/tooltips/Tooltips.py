@@ -6,11 +6,12 @@ from kivy.clock import Clock
 from kivy.compat import string_types
 from kivy.core.window import Window
 from kivy.factory import Factory
-from kivy.properties import BooleanProperty, ListProperty, NumericProperty, ObjectProperty, StringProperty
+from kivy.properties import BooleanProperty, NumericProperty, ObjectProperty, StringProperty
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.dropdown import DropDown
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.popup import Popup
@@ -18,10 +19,51 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.switch import Switch
 from kivy.uix.textinput import TextInput
 
+from carveracontroller.documentation import resolve_documentation_url
+
 # Minimum tooltip box width for short labels (matches previous wrap floor).
 TOOLTIP_MIN_WIDTH = 200
 # Wrap long tooltip text at this width so multi-line content stays readable.
 TOOLTIP_MAX_WIDTH = 360
+
+_tooltips_suppressed = False
+
+
+def set_tooltips_suppressed(suppressed: bool) -> None:
+    """Hide hover tips while another layer, such as the tour, owns the pointer."""
+    global _tooltips_suppressed
+    _tooltips_suppressed = bool(suppressed)
+
+
+def tooltips_suppressed() -> bool:
+    return _tooltips_suppressed
+
+
+def is_blocked_by_modal(widget=None):
+    """True when a Popup or ModalView is on the Window and widget is not inside it."""
+    if _tooltips_suppressed:
+        return True
+    try:
+        children = Window.children
+    except Exception:
+        return False
+    for child in children:
+        if not isinstance(child, (Popup, ModalView)):
+            continue
+        if widget is None:
+            return True
+        try:
+            current = widget
+            depth = 0
+            while current is not None and depth < 20:
+                if current is child:
+                    return False
+                current = getattr(current, "parent", None)
+                depth += 1
+            return True
+        except Exception:
+            return True
+    return False
 
 
 def _compute_tooltip_box_size(
@@ -42,6 +84,18 @@ def _compute_tooltip_box_size(
     return width, height
 
 
+def _sync_tooltip_spacing(tooltip, *, has_text, has_image, spacing=15):
+    """Use BoxLayout spacing only when both text and image occupy space.
+
+    The image child stays in the tree so KV ids stay valid. A zero-size image
+    still consumes ``spacing``, which shows up as a blank line at the top of
+    the tooltip when the box is resized from a live ``tooltip_txt`` change.
+    """
+    if tooltip is None:
+        return
+    tooltip.spacing = spacing if has_text and has_image else 0
+
+
 class Tooltip(BoxLayout):
     pass
 
@@ -55,12 +109,18 @@ class ToolTipContentLabel(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.text_size = (None, None)
+        if self.text:
+            self.refresh_text_size()
 
     def on_text(self, *args):
+        if getattr(self, "_label", None) is None:
+            return
         self.refresh_text_size()
 
     def refresh_text_size(self):
         """Size to the longest line, wrapping only when past max_width."""
+        if getattr(self, "_label", None) is None:
+            return
         if not self.text:
             self.text_size = (None, None)
             return
@@ -98,22 +158,6 @@ class ToolTipSwitch(Switch):
         self.bind(on_release=self.close_tooltip)
         self._build_tooltip()
 
-    def _is_blocked_by_modal(self):
-        for child in Window.children:
-            if isinstance(child, (Popup, ModalView)):
-                try:
-                    current = self.parent
-                    depth = 0
-                    while current and depth < 20:
-                        if current == child:
-                            return False
-                        current = current.parent
-                        depth += 1
-                    return True
-                except:
-                    return True
-        return False
-
     def _build_tooltip(self, *largs):
         # Only build the tooltip if it hasn't been created yet
         if self._tooltip:
@@ -166,15 +210,18 @@ class ToolTipSwitch(Switch):
         tooltip_label = self._tooltip.ids.tooltip_label
         tooltip_image = self._tooltip.ids.tooltip_image
 
-        # Calculate new size based on text and image dimensions
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(tooltip_label.text),
+            has_image=image_width > 0 or image_height > 0,
+        )
 
         # Keep a stable minimum width for short labels; long text can grow up to max wrap.
         new_width = max(text_width + 20, image_width + 20, TOOLTIP_MIN_WIDTH + 20 if tooltip_label.text else 0)
         new_height = text_height + image_height + 20
 
-        # Update tooltip size
         self._tooltip.size = (new_width, new_height)
         self._tooltip.canvas.ask_update()  # Force UI refresh
         self._tooltip.ids.tooltip_label.texture_update()
@@ -196,7 +243,7 @@ class ToolTipSwitch(Switch):
             self.close_tooltip()
             return
 
-        if self._is_blocked_by_modal():
+        if is_blocked_by_modal(self):
             self.close_tooltip()
             return
 
@@ -236,6 +283,8 @@ class ToolTipSwitch(Switch):
             Window.remove_widget(self._tooltip)
 
     def display_tooltip(self, *args):
+        if is_blocked_by_modal(self):
+            return
         Window.add_widget(self._tooltip)
 
 
@@ -266,22 +315,6 @@ class ToolTipTextInput(TextInput):
         if value:
             App.get_running_app().root.toggle_keyboard_jog_control(True)
 
-    def _is_blocked_by_modal(self):
-        for child in Window.children:
-            if isinstance(child, (Popup, ModalView)):
-                try:
-                    current = self.parent
-                    depth = 0
-                    while current and depth < 20:
-                        if current == child:
-                            return False
-                        current = current.parent
-                        depth += 1
-                    return True
-                except:
-                    return True
-        return False
-
     def _build_tooltip(self, *largs):
         # Only build the tooltip if it hasn't been created yet
         if self._tooltip:
@@ -334,15 +367,18 @@ class ToolTipTextInput(TextInput):
         tooltip_label = self._tooltip.ids.tooltip_label
         tooltip_image = self._tooltip.ids.tooltip_image
 
-        # Calculate new size based on text and image dimensions
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(tooltip_label.text),
+            has_image=image_width > 0 or image_height > 0,
+        )
 
         # Keep a stable minimum width for short labels; long text can grow up to max wrap.
         new_width = max(text_width + 20, image_width + 20, TOOLTIP_MIN_WIDTH + 20 if tooltip_label.text else 0)
         new_height = text_height + image_height + 20
 
-        # Update tooltip size
         self._tooltip.size = (new_width, new_height)
         self._tooltip.canvas.ask_update()  # Force UI refresh
         self._tooltip.ids.tooltip_label.texture_update()
@@ -364,7 +400,7 @@ class ToolTipTextInput(TextInput):
             self.close_tooltip()
             return
 
-        if self._is_blocked_by_modal():
+        if is_blocked_by_modal(self):
             self.close_tooltip()
             return
 
@@ -404,6 +440,8 @@ class ToolTipTextInput(TextInput):
             Window.remove_widget(self._tooltip)
 
     def display_tooltip(self, *args):
+        if is_blocked_by_modal(self):
+            return
         Window.add_widget(self._tooltip)
 
 
@@ -422,7 +460,6 @@ class ToolTipButton(Button):
     # intended Image size in display pixels (a supersampled texture may be
     # larger than that; do not use texture.size for layout).
     tooltip_texture_provider = ObjectProperty(None, allownone=True)
-    tooltip_radius = NumericProperty(0.2)
     tooltip_horizontal = BooleanProperty(False)
     tooltip_markup = BooleanProperty(False)
 
@@ -444,22 +481,6 @@ class ToolTipButton(Button):
         Window.bind(mouse_pos=self.on_mouse_pos)
         self.bind(on_release=self.close_tooltip)
         self._build_tooltip()
-
-    def _is_blocked_by_modal(self):
-        for child in Window.children:
-            if isinstance(child, (Popup, ModalView)):
-                try:
-                    current = self.parent
-                    depth = 0
-                    while current and depth < 20:
-                        if current == child:
-                            return False
-                        current = current.parent
-                        depth += 1
-                    return True
-                except:
-                    return True
-        return False
 
     def _build_tooltip(self, *largs):
         # Only build the tooltip if it hasn't been created yet
@@ -562,6 +583,11 @@ class ToolTipButton(Button):
 
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(tooltip_label.text),
+            has_image=image_width > 0 or image_height > 0,
+        )
 
         new_width, new_height = _compute_tooltip_box_size(
             text_width,
@@ -595,7 +621,7 @@ class ToolTipButton(Button):
             self.close_tooltip()
             return
 
-        if self._is_blocked_by_modal():
+        if is_blocked_by_modal(self):
             self.close_tooltip()
             return
 
@@ -616,6 +642,11 @@ class ToolTipButton(Button):
 
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(self.tooltip_txt),
+            has_image=image_width > 0 or image_height > 0,
+        )
 
         tooltip_width, tooltip_height = _compute_tooltip_box_size(
             text_width,
@@ -646,6 +677,8 @@ class ToolTipButton(Button):
         # Rasterizing is expensive, so it waits until the hover delay has
         # elapsed rather than running on every mouse move across the widget.
         # The box then has to be re-measured around the new image.
+        if is_blocked_by_modal(self):
+            return
         if self._ensure_tooltip_texture() and self._hover_pos is not None:
             self._layout_tooltip_at(self._hover_pos)
         Window.add_widget(self._tooltip)
@@ -674,22 +707,6 @@ class ToolTipDropDown(DropDown):
         self.bind(on_release=self.close_tooltip)
         self._build_tooltip()
 
-    def _is_blocked_by_modal(self):
-        for child in Window.children:
-            if isinstance(child, (Popup, ModalView)):
-                try:
-                    current = self.parent
-                    depth = 0
-                    while current and depth < 20:
-                        if current == child:
-                            return False
-                        current = current.parent
-                        depth += 1
-                    return True
-                except:
-                    return True
-        return False
-
     def _build_tooltip(self, *largs):
         # Only build the tooltip if it hasn't been created yet
         if self._tooltip:
@@ -742,15 +759,18 @@ class ToolTipDropDown(DropDown):
         tooltip_label = self._tooltip.ids.tooltip_label
         tooltip_image = self._tooltip.ids.tooltip_image
 
-        # Calculate new size based on text and image dimensions
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(tooltip_label.text),
+            has_image=image_width > 0 or image_height > 0,
+        )
 
         # Keep a stable minimum width for short labels; long text can grow up to max wrap.
         new_width = max(text_width + 20, image_width + 20, TOOLTIP_MIN_WIDTH + 20 if tooltip_label.text else 0)
         new_height = text_height + image_height + 20
 
-        # Update tooltip size
         self._tooltip.size = (new_width, new_height)
         self._tooltip.canvas.ask_update()  # Force UI refresh
         self._tooltip.ids.tooltip_label.texture_update()
@@ -772,7 +792,7 @@ class ToolTipDropDown(DropDown):
             self.close_tooltip()
             return
 
-        if self._is_blocked_by_modal():
+        if is_blocked_by_modal(self):
             self.close_tooltip()
             return
 
@@ -812,6 +832,8 @@ class ToolTipDropDown(DropDown):
             Window.remove_widget(self._tooltip)
 
     def display_tooltip(self, *args):
+        if is_blocked_by_modal(self):
+            return
         Window.add_widget(self._tooltip)
 
 
@@ -835,24 +857,9 @@ class ToolTipLabel(Label):
         fbind("tooltip_image", self._update_image)
         fbind("tooltip_image_size", self._update_image_size)
         Window.bind(mouse_pos=self.on_mouse_pos)
-        self.bind(on_release=self.close_tooltip)
+        if "on_release" in self.events():
+            self.bind(on_release=self.close_tooltip)
         self._build_tooltip()
-
-    def _is_blocked_by_modal(self):
-        for child in Window.children:
-            if isinstance(child, (Popup, ModalView)):
-                try:
-                    current = self.parent
-                    depth = 0
-                    while current and depth < 20:
-                        if current == child:
-                            return False
-                        current = current.parent
-                        depth += 1
-                    return True
-                except:
-                    return True
-        return False
 
     def _build_tooltip(self, *largs):
         # Only build the tooltip if it hasn't been created yet
@@ -871,17 +878,24 @@ class ToolTipLabel(Label):
         self._update_tooltip()
 
     def _update_tooltip(self, *largs):
+        if not self._tooltip:
+            return
+        label = self._tooltip.ids.tooltip_label
         txt = self.tooltip_txt
         if txt:
-            self._tooltip.ids.tooltip_label.text = txt
-            self._tooltip.ids.tooltip_label.size = self._tooltip.ids.tooltip_label.texture_size
+            label.text = txt
+            if hasattr(label, "refresh_text_size"):
+                label.refresh_text_size()
+            label.size = label.texture_size
         else:
-            self._tooltip.ids.tooltip_label.text = ""
-            self._tooltip.ids.tooltip_label.size = (0, 0)
+            label.text = ""
+            label.size = (0, 0)
 
         self._update_tooltip_size()
 
     def _update_image(self, *largs):
+        if not self._tooltip:
+            return
         imgpath = self.tooltip_image
         if imgpath:
             self._tooltip.ids.tooltip_image.source = imgpath
@@ -902,23 +916,35 @@ class ToolTipLabel(Label):
             tooltip_image.size = tooltip_image.texture_size
         else:
             tooltip_image.size = (0, 0)
+        self._update_tooltip_size()
 
     def _update_tooltip_size(self):
+        if not self._tooltip:
+            return
         tooltip_label = self._tooltip.ids.tooltip_label
         tooltip_image = self._tooltip.ids.tooltip_image
 
-        # Calculate new size based on text and image dimensions
         text_width, text_height = tooltip_label.texture_size
         image_width, image_height = tooltip_image.size
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(tooltip_label.text),
+            has_image=image_width > 0 or image_height > 0,
+        )
+        new_width, new_height = _compute_tooltip_box_size(
+            text_width,
+            text_height,
+            image_width,
+            image_height,
+            has_text=bool(tooltip_label.text),
+            has_image=bool(self.tooltip_image),
+            horizontal=False,
+            spacing=self._tooltip.spacing,
+        )
 
-        # Keep a stable minimum width for short labels; long text can grow up to max wrap.
-        new_width = max(text_width + 20, image_width + 20, TOOLTIP_MIN_WIDTH + 20 if tooltip_label.text else 0)
-        new_height = text_height + image_height + 20
-
-        # Update tooltip size
         self._tooltip.size = (new_width, new_height)
-        self._tooltip.canvas.ask_update()  # Force UI refresh
-        self._tooltip.ids.tooltip_label.texture_update()
+        self._tooltip.canvas.ask_update()
+        tooltip_label.texture_update()
 
     def on_mouse_pos(self, *args):
         if not self.show_tooltips:
@@ -937,25 +963,39 @@ class ToolTipLabel(Label):
             self.close_tooltip()
             return
 
-        if self._is_blocked_by_modal():
+        if is_blocked_by_modal(self):
             self.close_tooltip()
             return
 
         pos = args[1]
-        tooltip_width, tooltip_height = self._tooltip.size
+        self._layout_tooltip_at(pos)
+
+        Clock.unschedule(self.display_tooltip)
+        self.close_tooltip()
+        if self.collide_point(*self.to_widget(*pos)):
+            Clock.schedule_once(self.display_tooltip, self.tooltip_delay)
+
+    def _layout_tooltip_at(self, pos):
+        """Size the tooltip box for its current content and place it near ``pos``."""
         window_width, window_height = Window.size
         tooltip_label = self._tooltip.ids.tooltip_label
         tooltip_image = self._tooltip.ids.tooltip_image
+        _sync_tooltip_spacing(
+            self._tooltip,
+            has_text=bool(self.tooltip_txt),
+            has_image=tooltip_image.size[0] > 0 or tooltip_image.size[1] > 0,
+        )
 
-        text_width = tooltip_label.texture_size[0]
-        image_width = tooltip_image.width
-
-        tooltip_padding = 10
-        if self.tooltip_image:
-            tooltip_padding = 40
-
-        tooltip_width = max(text_width, image_width, TOOLTIP_MIN_WIDTH if self.tooltip_txt else 0)
-        tooltip_height = tooltip_label.texture_size[1] + tooltip_image.height + tooltip_padding
+        tooltip_width, tooltip_height = _compute_tooltip_box_size(
+            tooltip_label.texture_size[0],
+            tooltip_label.texture_size[1],
+            tooltip_image.size[0],
+            tooltip_image.size[1],
+            has_text=bool(self.tooltip_txt),
+            has_image=bool(self.tooltip_image),
+            horizontal=False,
+            spacing=self._tooltip.spacing,
+        )
         self._tooltip.size = (tooltip_width, tooltip_height)
         x = pos[0]
         y = pos[1]
@@ -967,32 +1007,23 @@ class ToolTipLabel(Label):
             y = window_height - tooltip_height - 40
         self._tooltip.pos = (x, y)
 
-        Clock.unschedule(self.display_tooltip)
-        self.close_tooltip()
-        if self.collide_point(*self.to_widget(*pos)):
-            Clock.schedule_once(self.display_tooltip, self.tooltip_delay)
-
     def close_tooltip(self, *args):
         if self._tooltip:  # for memory leaks
             Window.remove_widget(self._tooltip)
 
     def display_tooltip(self, *args):
+        if is_blocked_by_modal(self):
+            return
         Window.add_widget(self._tooltip)
 
 
-class HelpButton(ButtonBehavior, BoxLayout):
+class HelpButton(ButtonBehavior, FloatLayout):
     image_source = StringProperty("data/open_iconic_UI/oi--question-mark.png")
     helpPath = StringProperty("https://carvera-community.gitbook.io/docs")
-    background_normal = StringProperty("atlas://data/images/defaulttheme/button")
-    background_down = StringProperty("atlas://data/images/defaulttheme/button_pressed")
-    background_disabled_normal = StringProperty("atlas://data/images/defaulttheme/button_disabled")
-    background_disabled_down = StringProperty("atlas://data/images/defaulttheme/button_disabled_pressed")
-    border = ListProperty([16, 16, 16, 16])
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.bind(on_release=self.open_link)
-        fbind = self.fbind
 
     def open_link(self, *args):
-        webbrowser.open(self.helpPath)
+        webbrowser.open(resolve_documentation_url(self.helpPath))

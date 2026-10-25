@@ -1,8 +1,76 @@
+[unreleased]
+- Enhancement: UI is now themed. You can select one of multiple visual styles in the Settings. Themes can be further customised in the theme editer.
+- Change: Previous G-Code highlighting settings page collapsed into theme settings
+- Fixed: File playback will start by going the configured clearance_z. Previously if the spindle was within the bounds of the gcode file margins, moving to clearance_z was not performed
+- Fixed: File picker for Config Backups on Windows didn't have a drive selector
+- Fixed: Colors of the rows in the MDI were sometimes not matching their content
+- Fixed: Multi-line inputs were sent as a single frame instead of multiple ones
+- Fixed: Android builds were incorrectly detecting the default language
+
+[2.3.0-RC1]
+- Enhancement: Upload and download multiple selected files from the file browser, with one progress popup for the batch
+- Enhancement: Shift-click selects a range of files in the file browser and turns multi-select on if it was off
+- Enhancement: Add a Z1 Record Timelapse toggle on the Config and Run screen, a recording mark on the camera button, and ability to open /sd/videos in the file browser when that folder exists
+- Enhancement: Add a Ghost display option that draws older toolpath faint and recent moves more solid
+- Enhancement: Firmware updater now support Makera Z1. Detects if fw is bundled LPC+ESP, LPC-only, or ESP-only and updates using the correct method
+- Enhancement: Improve update popup UI and retrieve version data from the GitHub API
+- Enhancement: Improve Config and Run popup UI
+- Enhancement: Replace the nested Remote/Local file popup with a single file browser
+- Enhancement: Auto enclosure light on connect and off on disconnect or app close. Controller setting is available to enable/disable this feature, default is disabled.
+- Enhancement: Tool-change flags have tooltip showing time until the change
+- Enhancement: Remaining time text alternates with time until the next tool change and playback completion
+- Enhancement: Selected files show estimated run time on the playback bar before the job starts
+- Enhancement: Intellisense-like popups explaining commands in lines selected in the gcode viewer and MDI terminal
+- Enhancement: Support for connect to the Makera Z1 over USB
+- Enhancement: Add Auto Blow, Auto Bed Clean, and Ionizer toggles to the Config and Run screen on Z1
+- Enhancement: Add Z1 bed background
+- Enhancement: Machine bed background images in the config-n-run preview screen now filtered to show images that match the machine model connected
+- Enhancement: Add stock settings and simulation to the G-Code viewer
+- Enhancement: Alarm popup now notes an engaged e-stop when the halt reason is not the e-stop code
+- Enhancement: Use machine limits when available to calculate time estimates
+- Enhancement: Add bed settings and visualization to the G-Code viewer
+- Enhancement: Add keyboard shortcuts settings
+- Enhancement: Auto-correct MDI command case. When a command entered in the MDI matches a known command, its case is corrected to the canonical form before sending (e.g. 'g0 x10' sends as 'G0 X10'). Controlled by a new "Auto-Correct MDI Command Case" setting, enabled by default.
+- Enhancement: The documentation site base URL is changed to the dev version when a non-stable version number is set 
+- Enhancement: Migrate stock simulation to a native implementation for better performances
+- Enhancement: Add a guided tour on first startup
+- Change: Update screen is now accessible when not connected to a machine
+- Change: Facing wizard now supports center WCS origin
+- Change: Hide Auto Vacuum on the Config and Run screen when the machine is not a C1
+- Change: Config and Run preview now uses now uses the configured worksize_x/y for the bed size
+- Change: Auto Leveling auto-enables Auto Z Probe, but keeps the previous Z-probe location and allows the location config to be changed. Auto Z Probe can be turned off while leveling, but a warning is shown.
+- Change: Replace the MDI/FILE buttons by a tabbed panel
+- Change: Replace the G-code first/previous/next/last buttons with a compact page bar that shows the current page and line range, and hides when the file fits on one page
+- Change: The WCS button now shows rotation in the subtext, alternating with the WCS name when a description is set.
+- Change: Add support for iOS 27
+- Change: Stop splitting 3-axis G0/G1 moves every 0.5mm and split A-axis moves using the same tolerance as G2/G3 instead of every 0.5°
+- Changed: Machine config backup completes when a file's MD5 checksum does not match, and warns that some machines ship with factory MD5 mismatches
+- Changed: Keep the Z1 camera panel open if the stream drops, and reconnect while a spinner is shown in the camera view
+- Changed: If running RC controller/firmware default to selecting RC releases in update screen as well
+- Fixed: Turning Laser Mode off and on again shows the confirm dialog and can enter laser mode without restarting
+- Fixed: Cancelling the Laser Mode confirm dialog turns the laser switch back off
+- Fixed: Deleting a multi-selection no longer leaves those files selected after they are gone
+- Fixed: Video downloads from /sd/video and /sd/videos no longer show an MD5 mismatch error. The Makera ESP32 advertises a bad checksum for those files; the download is kept and a warning is logged
+- Fixed: Harden the gcode parser against "zero length" movement, and prevent division by zero in play slider
+- Fixed: Time estimates ignoring speed for some 4th-axis moves
+- Fixed: Allow to select the bottom element of the MDI, Gcode and probing confirmation lists
+- Fixed: Machine config backup no longer applies settings or opens files in the G-code viewer
+- Fixed: Fixed rotary previews so toolpaths, pointers, and stock rotate around the WCS origin without unwanted orbiting.
+- Fixed: Keep thin tool icon fills visible by drawing the outline outside the silhouette.
+- Fixed: Upload-and-select on the Z1 would not select the file after uploading. The select callback ran on the wrong thread because Z1 does not use .lz compression.
+- Fixed: Connecting to a different machine now clears the previous job's file view, tool-change flags, and 3D simulation
+- Fixed: Hiding tools in the G-code viewer now always hides the moves between tool changes
+- Fixed: The probe button in the main menu is disabled unless community firmware is loaded, matching the Probing button on the control screen
+- Fixed: Firmware detection now updates the UI on the main thread, and the tool Change/Set dropdowns no longer keep community-only entries (3D Probe, Laser) after connecting to stock firmware
+- Fixed: Continuous jogging no longer stops when the firmware reports a leftover internal stop reset on the next `$J`
+- Fixed: Prevent a blank space sometimes being displayed above the text of some tooltips
+
 [2.2.0]
 - Changed: Missed heartbeats with the machine are treated as comms backpressure, and the machine state is changed to "Waiting on comms". Only if link connection is lost will it be treated as a disconnect
 - Fixed: Consolidated the two different re-connection methods into one
 - Fixed: Checkboxes in the CMM Workbench and Facing wizard stay visible on the dark background
 - Fixed: Commands sent using the "Send" buttons are now added to the MDI history
+- Fixed: The probe button in the main menu is disabled unless community firmware is loaded, matching the Probing button on the control screen
 
 [2.2.0-RC3]
 - Enhancement: The step size is now synchronized between the main screen and the Probing screen
@@ -14,6 +82,7 @@
 - Enhancement: Adds "Allow Jogging When Spindle or Laser Is On" option (disabled by default). "Allow Jogging When Machine Running" will now be enabled by default. Existing configs that already allowed jogging while the machine is running also enable the new spindle/laser option.
 - Enhancement: Windows and Android artifacts are now signed
 - Enhancement: Abort CMM workbench operations when an invalid machine state is detected
+- Enhancement: Windows and Android artifacts are now signed
 - Fixed: Prevent a probing modal crash if E is not provided when using the angle operation
 - Fixed: Default Values on Probing screens caused probing to fail unexpectedly 
 - Fixed: Remaining job time no longer resumes counting after aborting playback and disconnecting
@@ -25,7 +94,8 @@
 - Fixed: Machine time sync now includes daylight saving, SD card timestamps now match the PC clock when daylight savings is in effect
 - Changed: added help button to probing screen confirmation/error popup for clarity
 - Changed: Moved Z1 Camera to a collapsible area in the Gcode Viewer. Collapsible splitter is only shown if a supported camera is found.
-- Change: Moved tools visibility controls to the color scheme panel
+- Changed: Moved tools visibility controls to the color scheme panel
+- Changed: Moved tools visibility controls to the color scheme panel
 
 [2.2.0-RC1]
 - Enhancement: Read tool definitions from post-processor outputs and use them in the G-code viewer

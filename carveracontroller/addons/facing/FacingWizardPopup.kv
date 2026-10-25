@@ -12,7 +12,7 @@
     padding_y: dp(2)
     halign: 'left'
     valign: 'middle'
-    color: 200/255, 200/255, 200/255, 1
+    color: app.theme.text_secondary
 
 <FacingSavePresetContent>:
     orientation: 'vertical'
@@ -28,7 +28,7 @@
         text_size: self.width, None
         halign: 'left'
         valign: 'bottom'
-        color: 0.78, 0.79, 0.82, 1
+        color: app.theme.text_secondary
     TextInput:
         id: ti_name
         size_hint_y: None
@@ -50,7 +50,7 @@
     size_hint: 0.88, 0.9
     pos_hint: {'center_x': 0.5, 'center_y': 0.5}
     auto_dismiss: False
-    overlay_color: 0, 0, 0, 0.35
+    overlay_color: app.theme.overlay
 
     BoxLayout:
         orientation: 'vertical'
@@ -72,7 +72,7 @@
                     do_default_tab: False
                     tab_width: dp(120)
                     bar_width: dp(8)
-                    bar_color: 0.85, 0.25, 0.2, 1
+                    bar_color: app.theme.danger
                     padding: dp(8), dp(8), dp(8), dp(10)
 
                     TabbedPanelItem:
@@ -94,12 +94,12 @@
                                     size_hint_x: 1
                                     font_size: dp(14)
                                     line_spacing: dp(5)
-                                    color: 0.72, 0.73, 0.76, 1
+                                    color: app.theme.text_secondary
                                     text_size: self.width, None
                                     halign: 'left'
                                     valign: 'top'
                                     multiline: True
-                                    text: tr._('Measure your stock and pick the corner where X0 Y0 sits—the point you touched off when setting work zero. Width runs along X and length along Y from that corner. Margins pad the outline outward so facing and probing keep a safe distance from the edges. Extra depth removes a bit more material downward on top of the facing depth. Clearance height is how high the spindle travels between moves. If you enable Z grid probing on the Z probe grid tab, the machine checks the surface first; after you swap to your facing tool, Z zero is aligned to the highest spot the probe found.')
+                                    text: tr._('Measure your stock and pick where X0 Y0 sits—the point you touched off when setting work zero. Width runs along X and length along Y from that origin. Margins pad the outline outward so facing and probing keep a safe distance from the edges. Extra depth removes a bit more material downward on top of the facing depth. Clearance height is how high the spindle travels between moves. If you enable Z grid probing on the Z probe grid tab, the machine checks the surface first; after you swap to your facing tool, Z zero is aligned to the highest spot the probe found.')
                                     height: max(dp(60), self.texture_size[1] + dp(10))
 
                                 GridLayout:
@@ -111,7 +111,7 @@
                                     spacing: dp(4)
 
                                     Label:
-                                        text: tr._('WCS origin corner')
+                                        text: tr._('WCS origin')
                                     Spinner:
                                         id: spn_stock_corner
                                         values: ['']
@@ -186,7 +186,7 @@
                                     size_hint_x: 1
                                     font_size: dp(14)
                                     line_spacing: dp(5)
-                                    color: 0.72, 0.73, 0.76, 1
+                                    color: app.theme.text_secondary
                                     text_size: self.width, None
                                     halign: 'left'
                                     valign: 'top'
@@ -220,7 +220,16 @@
 
                                     Label:
                                         text: tr._('Pattern')
-                                    BoxLayout:
+                                        size_hint_y: None
+                                        height: dp(40) * 2 + dp(4)
+                                    GridLayout:
+                                        id: pattern_btns
+                                        cols: 2
+                                        size_hint_y: None
+                                        height: dp(40) * 2 + dp(4)
+                                        row_default_height: dp(40)
+                                        row_force_default: True
+                                        spacing: dp(4)
                                         ToggleButton:
                                             id: raster_x_btn
                                             text: tr._('Along X')
@@ -232,7 +241,11 @@
                                             group: 'facing_pattern'
                                         ToggleButton:
                                             id: raster_spiral_btn
-                                            text: tr._('Spiral')
+                                            text: tr._('Rect. Spiral')
+                                            group: 'facing_pattern'
+                                        ToggleButton:
+                                            id: raster_round_btn
+                                            text: tr._('Round Spiral')
                                             group: 'facing_pattern'
 
                                     Label:
@@ -265,6 +278,14 @@
                                     TextInput:
                                         id: txt_rough_step
                                         text: default_values.DEFAULT_TXT['txt_rough_step']
+                                        multiline: False
+                                        input_filter: 'float'
+
+                                    Label:
+                                        text: tr._('Path radius (mm)')
+                                    TextInput:
+                                        id: txt_path_radius
+                                        text: default_values.DEFAULT_TXT['txt_path_radius']
                                         multiline: False
                                         input_filter: 'float'
 
@@ -334,12 +355,12 @@
                                     size_hint_x: 1
                                     font_size: dp(14)
                                     line_spacing: dp(5)
-                                    color: 0.72, 0.73, 0.76, 1
+                                    color: app.theme.text_secondary
                                     text_size: self.width, None
                                     halign: 'left'
                                     valign: 'top'
                                     multiline: True
-                                    text: tr._('Turn on Include Z grid probe with the checkbox below; layout matches the origin corner from the Stock tab. The machine taps the surface on a grid to map height. Probe Z travel must stay negative so the probe searches downward. Grid inset pulls probe points slightly inside the gray stock outline (not inside the dashed margin ring). After probing and loading your facing tool, Z zero is adjusted so the tallest measured spot is treated as the top surface for facing.')
+                                    text: tr._('Turn on Include Z grid probe with the checkbox below; layout matches the origin from the Stock tab. The machine taps the surface on a grid to map height. Probe Z travel must stay negative so the probe searches downward. Grid inset pulls probe points slightly inside the gray stock outline (not inside the dashed margin ring). After probing and loading your facing tool, Z zero is adjusted so the tallest measured spot is treated as the top surface for facing.')
                                     height: max(dp(60), self.texture_size[1] + dp(10))
 
                                 GridLayout:
@@ -434,7 +455,7 @@
                                     size_hint_x: 1
                                     font_size: dp(14)
                                     line_spacing: dp(5)
-                                    color: 0.72, 0.73, 0.76, 1
+                                    color: app.theme.text_secondary
                                     text_size: self.width, None
                                     halign: 'left'
                                     valign: 'top'
@@ -546,7 +567,7 @@
                         max_lines: 2
                         multiline: True
                         text: ''
-                        color: 0.92, 0.42, 0.35, 1
+                        color: app.theme.danger_text
 
                     Label:
                         size_hint_y: None
@@ -555,7 +576,7 @@
                         text_size: self.width - dp(8), None
                         halign: 'center'
                         valign: 'top'
-                        color: 0.65, 0.66, 0.7, 1
+                        color: app.theme.text_muted
                         text: tr._('Gray solid: stock outline · Dashed ring: margin · Red: facing path · Blue: probe grid (inset from stock edge) · Bright marker: X Y zero')
 
             BoxLayout:
@@ -567,7 +588,7 @@
                 Label:
                     size_hint_y: None
                     font_size: dp(13)
-                    color: 0.7, 0.71, 0.74, 1
+                    color: app.theme.text_secondary
                     text_size: self.width, None
                     halign: 'left'
                     valign: 'middle'
@@ -578,7 +599,7 @@
                     size_hint_y: 1
                     canvas.before:
                         Color:
-                            rgba: 35/255, 35/255, 35/255, 1
+                            rgba: app.theme.panel_inset
                         Rectangle:
                             pos: self.pos
                             size: self.size
@@ -605,7 +626,7 @@
             spacing: dp(6)
             canvas.before:
                 Color:
-                    rgba: 0.22, 0.22, 0.24, 1
+                    rgba: app.theme.row
                 Rectangle:
                     pos: self.pos[0], self.pos[1] + self.height - dp(1)
                     size: self.width, dp(1)

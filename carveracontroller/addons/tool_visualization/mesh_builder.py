@@ -5,9 +5,18 @@ Each tool is approximated by revolving a simple 2D profile.
 import math
 
 from carveracontroller.addons.tool_visualization.tool_definition import ToolType
+from carveracontroller.ui.theme import get_theme
 
-FLUTE_COLOR = (0.85, 0.65, 0.15, 0.45)
-SHANK_COLOR = (0.5, 0.5, 0.52, 0.3)
+
+def flute_color():
+    """Cutting color from the current theme."""
+    return tuple(get_theme().viewer_tool_flute)
+
+
+def shank_color():
+    """Shank color from the current theme."""
+    return tuple(get_theme().viewer_tool_shank)
+
 
 VERTEX_FORMAT = [
     (b"v_pos", 3, "float"),
@@ -106,7 +115,7 @@ def _surface_normal(dz, dr, theta):
 
 
 def _profile_color(index, shank_start_index):
-    return SHANK_COLOR if index >= shank_start_index else FLUTE_COLOR
+    return shank_color() if index >= shank_start_index else flute_color()
 
 
 def _add_vertex(positions, normals, colors, x, y, z, nx, ny, nz, color):
@@ -180,9 +189,9 @@ def _build_revolve_mesh(profile, segments=RADIAL_SEGMENTS, shank_start_index=Non
     Vertices are indexed and share smooth analytical normals derived from the
     profile tangent. Flat end caps use separate vertices with ±Z normals.
 
-    Profile points at index >= `shank_start_index` are colored as SHANK_COLOR;
-    earlier points keep the flute FLUTE_COLOR. When omitted, the whole tool is color
-    using FLUTE_COLOR.
+    Profile points at index >= `shank_start_index` use the theme shank color;
+    earlier points use the theme flute color. When omitted, the whole tool
+    uses the flute color.
     """
     if len(profile) < 2:
         raise ValueError("A tool profile needs at least two points")
@@ -269,7 +278,7 @@ def _tool_diameter(tool_def, scale):
     return fallback_tool_dimensions(scale)[0]
 
 
-def _effective_tool_diameter(tool_def, scale):
+def effective_tool_diameter(tool_def, scale):
     """Return the outer cutting diameter used for sizing and proportions."""
     diameter = _tool_diameter(tool_def, scale)
     if tool_def and getattr(tool_def, "tool_type", None) is ToolType.RADIUS_MILL:
@@ -285,7 +294,7 @@ def _fallback_stickout_extra(tool_def, diameter):
     return max(diameter, shank_diameter) * FALLBACK_STICKOUT_DIAMETER_FACTOR
 
 
-def _profile_length(tool_def, scale, diameter, shared_length=None):
+def profile_length(tool_def, scale, diameter, shared_length=None):
     """Return the overall stick-out to draw, in file units.
 
     Shoulder and flute lengths only describe the cutting end, so when the file
@@ -393,7 +402,7 @@ def _inferred_shoulder_length(tool_def, flute, overall):
     return flute + extra
 
 
-def _resolve_section_lengths(tool_def, fallback_overall):
+def resolve_section_lengths(tool_def, fallback_overall):
     """Return `(flute_z, shoulder_z, overall_z)` in file units.
 
     - flute_z: cutting flutes (gold)
@@ -406,7 +415,7 @@ def _resolve_section_lengths(tool_def, fallback_overall):
     missing after a tip inference, a short cutting-diameter shoulder is added so
     the shank does not start at the tip. Explicit flute with no shoulder still
     steps at the flute length. Missing stick-out comes from `fallback_overall`
-    (see `_profile_length`).
+    (see `profile_length`).
     """
     if not tool_def:
         return fallback_overall, fallback_overall, fallback_overall
@@ -754,9 +763,9 @@ def _tool_profile_with_shank(tool_def, length=None, scale=1.0):
     Missing diameters use the fixed on-screen fallback size.
     """
     diameter = _tool_diameter(tool_def, scale)
-    effective_diameter = _effective_tool_diameter(tool_def, scale)
-    fallback_overall = _profile_length(tool_def, scale, effective_diameter, length)
-    flute_z, shoulder_z, overall_z = _resolve_section_lengths(tool_def, fallback_overall)
+    effective_diameter = effective_tool_diameter(tool_def, scale)
+    fallback_overall = profile_length(tool_def, scale, effective_diameter, length)
+    flute_z, shoulder_z, overall_z = resolve_section_lengths(tool_def, fallback_overall)
     tool_type = getattr(tool_def, "tool_type", ToolType.UNKNOWN) if tool_def else ToolType.UNKNOWN
     corner_radius = _safe_corner_radius(tool_def, diameter, tool_type)
     taper_angle_deg = _safe_taper_angle_deg(tool_def)

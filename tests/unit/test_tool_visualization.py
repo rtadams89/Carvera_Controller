@@ -4,10 +4,31 @@ import math
 
 import pytest
 
+from carveracontroller.addons.cam import extract_cam_metadata
+from carveracontroller.addons.cam.parsers.freecad_makera import (
+    TOOL_TYPE_NAME_MAP as FREECAD_MAKERA_TOOL_TYPE_NAME_MAP,
+)
+from carveracontroller.addons.cam.parsers.freecad_makera import (
+    FreeCADMakeraParser,
+)
+from carveracontroller.addons.cam.parsers.fusion360_makera import (
+    TOOL_TYPE_NAME_MAP,
+    Fusion360MakeraParser,
+    _infer_shank_diameter,
+)
+from carveracontroller.addons.cam.parsers.makera_studio import (
+    TOOL_TYPE_NAME_MAP as MAKERA_STUDIO_TOOL_TYPE_NAME_MAP,
+)
+from carveracontroller.addons.cam.parsers.makera_studio import (
+    MakeraStudioParser,
+    parse_origin_type_name,
+)
+from carveracontroller.addons.stock.stock_estimate import shape_and_origin_from_cam_stock
+from carveracontroller.addons.stock.stock_geometry import compute_wcs_bounds
+from carveracontroller.addons.stock.stock_shape import CylindricalStock, RectangularStock, RotaryCylindricalStock
 from carveracontroller.addons.tool_visualization import (
     ToolDefinition,
     ToolType,
-    extract_tool_table,
     format_tool_tooltip,
 )
 from carveracontroller.addons.tool_visualization.icon_geometry import (
@@ -29,32 +50,15 @@ from carveracontroller.addons.tool_visualization.mesh_builder import (
     FALLBACK_TOOL_DISPLAY_HEIGHT,
     FALLBACK_TOOL_DISPLAY_RADIUS,
     FLOATS_PER_VERTEX,
-    FLUTE_COLOR,
     INFERRED_SHOULDER_DIAMETER_FACTOR,
     LENGTH_DIAMETER_FACTOR,
     MIN_VISIBLE_RADIUS,
-    SHANK_COLOR,
     VERTEX_FORMAT,
     build_tool_mesh,
     build_tool_meshes,
+    flute_color,
+    shank_color,
     tool_profile,
-)
-from carveracontroller.addons.tool_visualization.parsers.freecad_makera import (
-    TOOL_TYPE_NAME_MAP as FREECAD_MAKERA_TOOL_TYPE_NAME_MAP,
-)
-from carveracontroller.addons.tool_visualization.parsers.freecad_makera import (
-    FreeCADMakeraParser,
-)
-from carveracontroller.addons.tool_visualization.parsers.fusion360_makera import (
-    TOOL_TYPE_NAME_MAP,
-    Fusion360MakeraParser,
-    _infer_shank_diameter,
-)
-from carveracontroller.addons.tool_visualization.parsers.makera_studio import (
-    TOOL_TYPE_NAME_MAP as MAKERA_STUDIO_TOOL_TYPE_NAME_MAP,
-)
-from carveracontroller.addons.tool_visualization.parsers.makera_studio import (
-    MakeraStudioParser,
 )
 from carveracontroller.addons.tool_visualization.tool_definition import resolve_tool_type
 from carveracontroller.CNC import unit_scale_to_mm
@@ -242,6 +246,280 @@ class TestFusion360MakeraParser:
         assert tool.vendor == "Makera"
         assert tool.type_name == "drill"
 
+    def test_parses_box_top_front_left_stock(self, parser):
+        lines = [
+            "(T1  Flat  D=6 - flat end mill)\n",
+            "(@F360|STOCK|id=box|width=200.|depth=35.|height=20.)\n",
+            "(@F360|ORIGIN|type_name=topFrontLeft|x=-100.|y=-17.5|z=10.)\n",
+            "G90\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+
+        stock = metadata.stock
+        assert stock is not None
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 200.0
+        assert stock.length_mm == 35.0
+        assert stock.height_mm == 20.0
+        assert stock.diameter_mm is None
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+        assert 1 in metadata.tool_table
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RectangularStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(200.0)
+        assert bounds.min_y == pytest.approx(0.0)
+        assert bounds.max_y == pytest.approx(35.0)
+        assert bounds.min_z == pytest.approx(-20.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_box_top_center_stock(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=32.6|depth=32.6|height=4.)\n",
+            "(@F360|ORIGIN|type_name=topCenter|x=0.|y=0.|z=2.)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.width_mm == pytest.approx(32.6)
+        assert stock.length_mm == pytest.approx(32.6)
+        assert stock.height_mm == pytest.approx(4.0)
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-16.3)
+        assert bounds.max_x == pytest.approx(16.3)
+        assert bounds.min_y == pytest.approx(-16.3)
+        assert bounds.max_y == pytest.approx(16.3)
+        assert bounds.min_z == pytest.approx(-4.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_box_left_center_stock(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=220.|depth=30.|height=20.)\n",
+            "(@F360|ORIGIN|type_name=leftCenter|x=-110.|y=0.|z=0.)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 220.0
+        assert stock.length_mm == 30.0
+        assert stock.height_mm == 20.0
+        assert stock.xy_corner == "lc"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RectangularStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(220.0)
+        assert bounds.min_y == pytest.approx(-15.0)
+        assert bounds.max_y == pytest.approx(15.0)
+        assert bounds.min_z == pytest.approx(-10.0)
+        assert bounds.max_z == pytest.approx(10.0)
+
+    def test_parses_custom_origin_from_center_relative_xyz(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=200.|depth=35.|height=20.)\n",
+            "(@F360|ORIGIN|type_name=custom|x=-62.5|y=0.|z=-9.5)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(62.5)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(19.5)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-37.5)
+        assert bounds.max_x == pytest.approx(162.5)
+        assert bounds.min_y == pytest.approx(-17.5)
+        assert bounds.max_y == pytest.approx(17.5)
+        assert bounds.min_z == pytest.approx(-0.5)
+        assert bounds.max_z == pytest.approx(19.5)
+        assert bounds.center[0] == pytest.approx(62.5)
+        assert bounds.center[1] == pytest.approx(0.0)
+        assert bounds.center[2] == pytest.approx(9.5)
+
+    def test_parses_box_origin_residual_offset(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=40|depth=40|height=3)\n",
+            "(@F360|ORIGIN|type_name=topFrontLeft|x=-18|y=-20|z=1.5)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        # Residual is x/y/z vs the named point (topFrontLeft is at -20, -20, 1.5).
+        assert stock.offset_x_mm == pytest.approx(-2.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_parses_bottom_origin(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=40|depth=40|height=3)\n",
+            "(@F360|ORIGIN|type_name=bottomFrontLeft|x=-20|y=-20|z=-1.5)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "bottom"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_parses_semicolon_f360_stock_comments(self, parser):
+        lines = [
+            ";@F360|STOCK|id=box|width=80|depth=40|height=5\n",
+            ";@F360|ORIGIN|type_name=topFrontRight|x=40|y=-20|z=2.5\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "br"
+        assert stock.z_reference == "top"
+        assert stock.width_mm == 80.0
+        assert stock.length_mm == 40.0
+        assert stock.offset_x_mm == pytest.approx(0.0)
+
+    def test_parses_mill_cylinder_from_top_origin(self, parser):
+        lines = [
+            "(@F360|STOCK|id=cylinder|width=70|depth=70|height=50|diameter=70)\n",
+            "(@F360|ORIGIN|type_name=topCenter|x=0.|y=0.|z=25.)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "cylindrical"
+        assert stock.diameter_mm == 70.0
+        assert stock.height_mm == 50.0
+        assert stock.length_mm is None
+        assert stock.width_mm is None
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, CylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-35.0)
+        assert bounds.max_x == pytest.approx(35.0)
+        assert bounds.min_z == pytest.approx(-50.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_mill_tube_from_top_origin(self, parser):
+        lines = [
+            "(@F360|STOCK|id=tube|width=70|depth=70|height=50|diameter=70)\n",
+            "(@F360|ORIGIN|type_name=topCenter|x=0.|y=0.|z=25.)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "cylindrical"
+        assert stock.diameter_mm == 70.0
+        assert stock.height_mm == 50.0
+        assert stock.length_mm is None
+        assert stock.width_mm is None
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+
+    def test_parses_rotary_cylinder_left_center(self, parser):
+        lines = [
+            "(@F360|STOCK|id=cylinder|width=100|depth=30|height=30|diameter=30)\n",
+            "(@F360|ORIGIN|type_name=leftCenter|x=-50|y=0|z=0)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rotary_cylindrical"
+        assert stock.diameter_mm == 30.0
+        assert stock.length_mm == 100.0
+        assert stock.width_mm is None
+        assert stock.height_mm is None
+        assert stock.xy_corner == "lc"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RotaryCylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(100.0)
+        assert bounds.min_y == pytest.approx(-15.0)
+        assert bounds.max_y == pytest.approx(15.0)
+        assert bounds.min_z == pytest.approx(-15.0)
+        assert bounds.max_z == pytest.approx(15.0)
+
+    def test_parses_custom_rotary_cylinder_from_extents(self, parser):
+        lines = [
+            "(@F360|STOCK|id=cylinder|width=100|depth=30|height=30|diameter=30)\n",
+            "(@F360|ORIGIN|type_name=custom|x=-40|y=0|z=0)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rotary_cylindrical"
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(40.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-10.0)
+        assert bounds.max_x == pytest.approx(90.0)
+        assert bounds.min_z == pytest.approx(-15.0)
+        assert bounds.max_z == pytest.approx(15.0)
+
+    def test_ignores_unknown_stock_id(self, parser):
+        lines = [
+            "(@F360|STOCK|id=mesh|width=10|depth=10|height=10)\n",
+            "(@F360|ORIGIN|type_name=topFrontLeft|x=-5|y=-5|z=5)\n",
+            "(T1  Flat  D=6 - flat end mill)\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+        assert metadata.stock is None
+        assert 1 in metadata.tool_table
+
+    def test_stock_without_origin_uses_default_corner(self, parser):
+        lines = ["(@F360|STOCK|id=box|width=80|depth=40|height=5)\n"]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 80.0
+        assert stock.length_mm == 40.0
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+
+    def test_parses_inch_stock_into_millimetres(self, parser):
+        lines = [
+            "(@F360|STOCK|id=box|width=4.|depth=2.|height=0.5)\n",
+            "(@F360|ORIGIN|type_name=topFrontLeft|x=-2.|y=-1.|z=0.25)\n",
+        ]
+        stock = parser.parse_metadata(lines, unit_scale=unit_scale_to_mm("in")).stock
+
+        assert stock.width_mm == pytest.approx(101.6)
+        assert stock.length_mm == pytest.approx(50.8)
+        assert stock.height_mm == pytest.approx(12.7)
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
 
 class TestMakeraStudioParser:
     @pytest.fixture
@@ -417,6 +695,235 @@ class TestMakeraStudioParser:
         lines = ["(T1  Flat end mill  D=6 CR=0 - flat end mill)\n", "G0 X0\n"]
         assert parser.parse(lines) == {}
 
+    @pytest.mark.parametrize(
+        "type_name,xy_corner,z_reference",
+        [
+            ("topFrontLeft", "bl", "top"),
+            ("topFrontRight", "br", "top"),
+            ("topBackLeft", "tl", "top"),
+            ("topBackRight", "tr", "top"),
+            ("topCenter", "center", "top"),
+            ("topFrontCenter", "fc", "top"),
+            ("bottomFrontLeft", "bl", "bottom"),
+            ("leftCenter", "lc", "center"),
+            ("rightCenter", "rc", "center"),
+            ("frontCenter", "fc", "center"),
+            ("backCenter", "bc", "center"),
+            ("center", "center", "center"),
+        ],
+    )
+    def test_parses_origin_type_names(self, type_name, xy_corner, z_reference):
+        assert parse_origin_type_name(type_name) == (xy_corner, z_reference)
+
+    def test_parses_cuboid_top_front_left_stock(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cuboid|length=150|width=100|height=10|diameter=50\n",
+            ";@MKR|ORIGIN|id=0|type_name=topFrontLeft|x=-75|y=-50|z=5\n",
+            ";@MKR|TOOL|number=1|id=1|name=Flat|type=Flat End|diameter=2|cornerradius=0\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+
+        stock = metadata.stock
+        assert stock is not None
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 150.0
+        assert stock.length_mm == 100.0
+        assert stock.height_mm == 10.0
+        assert stock.diameter_mm is None
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+        assert 1 in metadata.tool_table
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RectangularStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(150.0)
+        assert bounds.min_y == pytest.approx(0.0)
+        assert bounds.max_y == pytest.approx(100.0)
+        assert bounds.min_z == pytest.approx(-10.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_cuboid_top_front_right_stock(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cuboid|length=40|width=40|height=3|diameter=1\n",
+            ";@MKR|ORIGIN|id=1|type_name=topFrontRight|x=20|y=-20|z=1.5\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "br"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-40.0)
+        assert bounds.max_x == pytest.approx(0.0)
+        assert bounds.min_y == pytest.approx(0.0)
+        assert bounds.max_y == pytest.approx(40.0)
+        assert bounds.min_z == pytest.approx(-3.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_cuboid_top_back_left_and_center(self, parser):
+        back_left = parser.parse_metadata(
+            [
+                ";@MKR|STOCK|id=cuboid|length=40|width=40|height=3|diameter=1\n",
+                ";@MKR|ORIGIN|id=3|type_name=topBackLeft|x=-20|y=20|z=1.5\n",
+            ]
+        ).stock
+        assert back_left.xy_corner == "tl"
+        assert back_left.offset_x_mm == pytest.approx(0.0)
+        assert back_left.offset_y_mm == pytest.approx(0.0)
+
+        center = parser.parse_metadata(
+            [
+                ";@MKR|STOCK|id=cuboid|length=40|width=40|height=3|diameter=1\n",
+                ";@MKR|ORIGIN|id=2|type_name=topCenter|x=0|y=0|z=1.5\n",
+            ]
+        ).stock
+        assert center.xy_corner == "center"
+        assert center.z_reference == "top"
+        assert center.offset_x_mm == pytest.approx(0.0)
+        assert center.offset_y_mm == pytest.approx(0.0)
+        assert center.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(center)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-20.0)
+        assert bounds.max_x == pytest.approx(20.0)
+        assert bounds.min_y == pytest.approx(-20.0)
+        assert bounds.max_y == pytest.approx(20.0)
+        assert bounds.min_z == pytest.approx(-3.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_cuboid_origin_residual_offset(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cuboid|length=40|width=40|height=3|diameter=1\n",
+            ";@MKR|ORIGIN|id=0|type_name=topFrontLeft|x=-18|y=-20|z=1.5\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.offset_x_mm == pytest.approx(-2.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_parses_rotary_cuboid_left_center(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cuboid|length=100|width=35|height=35|diameter=1\n",
+            ";@MKR|ORIGIN|id=11|type_name=leftCenter|x=-50|y=0|z=0\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 100.0
+        assert stock.length_mm == 35.0
+        assert stock.height_mm == 35.0
+        assert stock.xy_corner == "lc"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(100.0)
+        assert bounds.min_y == pytest.approx(-17.5)
+        assert bounds.max_y == pytest.approx(17.5)
+        assert bounds.min_z == pytest.approx(-17.5)
+        assert bounds.max_z == pytest.approx(17.5)
+
+    def test_parses_rotary_cylinder_left_center(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cylinder|length=100|width=35|height=35|diameter=30\n",
+            ";@MKR|ORIGIN|id=11|type_name=leftCenter|x=-50|y=0|z=0\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rotary_cylindrical"
+        assert stock.diameter_mm == 30.0
+        assert stock.length_mm == 100.0
+        assert stock.width_mm is None
+        assert stock.height_mm is None
+        assert stock.xy_corner == "lc"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RotaryCylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(100.0)
+        assert bounds.min_y == pytest.approx(-15.0)
+        assert bounds.max_y == pytest.approx(15.0)
+        assert bounds.min_z == pytest.approx(-15.0)
+        assert bounds.max_z == pytest.approx(15.0)
+
+    def test_parses_mill_cylinder_from_top_origin(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cylinder|length=50|width=50|height=20|diameter=40\n",
+            ";@MKR|ORIGIN|id=2|type_name=topCenter|x=0|y=0|z=10\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "cylindrical"
+        assert stock.diameter_mm == 40.0
+        assert stock.height_mm == 20.0
+        assert stock.length_mm is None
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, CylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-20.0)
+        assert bounds.max_x == pytest.approx(20.0)
+        assert bounds.min_z == pytest.approx(-20.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_bottom_origin(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=cuboid|length=40|width=40|height=3|diameter=1\n",
+            ";@MKR|ORIGIN|id=9|type_name=bottomFrontLeft|x=-20|y=-20|z=-1.5\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "bottom"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_ignores_unknown_stock_id(self, parser):
+        lines = [
+            ";@MKR|STOCK|id=mesh|length=10|width=10|height=10|diameter=1\n",
+            ";@MKR|ORIGIN|id=0|type_name=topFrontLeft|x=-5|y=-5|z=5\n",
+            ";@MKR|TOOL|number=1|id=1|name=Flat|type=Flat End|diameter=2|cornerradius=0\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+        assert metadata.stock is None
+        assert 1 in metadata.tool_table
+
+    def test_stock_without_origin_uses_default_corner(self, parser):
+        lines = [";@MKR|STOCK|id=cuboid|length=80|width=40|height=5|diameter=1\n"]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 80.0
+        assert stock.length_mm == 40.0
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+
 
 class TestFreeCADMakeraParser:
     @pytest.fixture
@@ -536,6 +1043,203 @@ class TestFreeCADMakeraParser:
         tool = parser.parse(lines)[5]
         assert tool.tool_type == ToolType.DRILL
         assert tool.taper_angle_deg == 59.0
+
+    def test_parses_box_top_front_left_stock(self, parser):
+        lines = [
+            "(@FC|TOOL|number=1|name=Endmill|type=Endmill|diameter=5|shankdiameter=3|flutelength=30|length=50)\n",
+            "(@FC|STOCK|id=box|width=150|depth=100|height=10)\n",
+            "(@FC|ORIGIN|type_name=topFrontLeft|x=-75|y=-50|z=5)\n",
+            "G90\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+
+        stock = metadata.stock
+        assert stock is not None
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 150.0
+        assert stock.length_mm == 100.0
+        assert stock.height_mm == 10.0
+        assert stock.diameter_mm is None
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+        assert 1 in metadata.tool_table
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RectangularStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(150.0)
+        assert bounds.min_y == pytest.approx(0.0)
+        assert bounds.max_y == pytest.approx(100.0)
+        assert bounds.min_z == pytest.approx(-10.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_sample_custom_origin_box(self, parser):
+        lines = [
+            "(@FC|TOOL|number=1|name=Endmill|id=1|type=Endmill|diameter=5|shankdiameter=3|flutelength=30|length=50)\n",
+            "(@FC|STOCK|id=box|width=154.779|depth=79.996|height=110)\n",
+            "(@FC|ORIGIN|type_name=custom|x=-17.389|y=-14.998|z=50)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == pytest.approx(154.779)
+        assert stock.length_mm == pytest.approx(79.996)
+        assert stock.height_mm == pytest.approx(110.0)
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(17.389)
+        assert stock.offset_y_mm == pytest.approx(14.998)
+        assert stock.offset_z_mm == pytest.approx(5.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.center[0] == pytest.approx(17.389)
+        assert bounds.center[1] == pytest.approx(14.998)
+        assert bounds.center[2] == pytest.approx(-50.0)
+
+    def test_parses_box_origin_residual_offset(self, parser):
+        lines = [
+            "(@FC|STOCK|id=box|width=40|depth=40|height=3)\n",
+            "(@FC|ORIGIN|type_name=topFrontLeft|x=-18|y=-20|z=1.5)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(-2.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_parses_bottom_origin(self, parser):
+        lines = [
+            "(@FC|STOCK|id=box|width=40|depth=40|height=3)\n",
+            "(@FC|ORIGIN|type_name=bottomFrontLeft|x=-20|y=-20|z=-1.5)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "bottom"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_parses_semicolon_fc_stock_comments(self, parser):
+        lines = [
+            ";@FC|STOCK|id=box|width=80|depth=40|height=5\n",
+            ";@FC|ORIGIN|type_name=topFrontRight|x=40|y=-20|z=2.5\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.xy_corner == "br"
+        assert stock.z_reference == "top"
+        assert stock.width_mm == 80.0
+        assert stock.length_mm == 40.0
+        assert stock.offset_x_mm == pytest.approx(0.0)
+
+    def test_parses_mill_cylinder_from_top_origin(self, parser):
+        lines = [
+            "(@FC|STOCK|id=cylinder|width=70|depth=70|height=50|diameter=70)\n",
+            "(@FC|ORIGIN|type_name=topCenter|x=0|y=0|z=25)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "cylindrical"
+        assert stock.diameter_mm == 70.0
+        assert stock.height_mm == 50.0
+        assert stock.length_mm is None
+        assert stock.width_mm is None
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, CylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(-35.0)
+        assert bounds.max_x == pytest.approx(35.0)
+        assert bounds.min_z == pytest.approx(-50.0)
+        assert bounds.max_z == pytest.approx(0.0)
+
+    def test_parses_rotary_cylinder_left_center(self, parser):
+        lines = [
+            "(@FC|STOCK|id=cylinder|width=100|depth=30|height=30|diameter=30)\n",
+            "(@FC|ORIGIN|type_name=leftCenter|x=-50|y=0|z=0)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rotary_cylindrical"
+        assert stock.diameter_mm == 30.0
+        assert stock.length_mm == 100.0
+        assert stock.width_mm is None
+        assert stock.height_mm is None
+        assert stock.xy_corner == "lc"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+        shape, origin = shape_and_origin_from_cam_stock(stock)
+        assert isinstance(shape, RotaryCylindricalStock)
+        bounds = compute_wcs_bounds(shape, origin)
+        assert bounds.min_x == pytest.approx(0.0)
+        assert bounds.max_x == pytest.approx(100.0)
+        assert bounds.min_y == pytest.approx(-15.0)
+        assert bounds.max_y == pytest.approx(15.0)
+        assert bounds.min_z == pytest.approx(-15.0)
+        assert bounds.max_z == pytest.approx(15.0)
+
+    def test_parses_custom_rotary_cylinder_from_extents(self, parser):
+        lines = [
+            "(@FC|STOCK|id=cylinder|width=100|depth=30|height=30|diameter=30)\n",
+            "(@FC|ORIGIN|type_name=custom|x=-40|y=0|z=0)\n",
+        ]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rotary_cylindrical"
+        assert stock.xy_corner == "center"
+        assert stock.z_reference == "center"
+        assert stock.offset_x_mm == pytest.approx(40.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
+
+    def test_ignores_unknown_stock_id(self, parser):
+        lines = [
+            "(@FC|STOCK|id=mesh|width=10|depth=10|height=10)\n",
+            "(@FC|ORIGIN|type_name=topFrontLeft|x=-5|y=-5|z=5)\n",
+            "(@FC|TOOL|number=1|name=Endmill|type=Endmill|diameter=6)\n",
+        ]
+        metadata = parser.parse_metadata(lines)
+        assert metadata.stock is None
+        assert 1 in metadata.tool_table
+
+    def test_stock_without_origin_uses_default_corner(self, parser):
+        lines = ["(@FC|STOCK|id=box|width=80|depth=40|height=5)\n"]
+        stock = parser.parse_metadata(lines).stock
+
+        assert stock.kind == "rectangular"
+        assert stock.width_mm == 80.0
+        assert stock.length_mm == 40.0
+        assert stock.xy_corner == "bl"
+        assert stock.z_reference == "top"
+        assert stock.offset_x_mm == pytest.approx(0.0)
+
+    def test_parses_inch_stock_into_millimetres(self, parser):
+        lines = [
+            "(@FC|STOCK|id=box|width=4.|depth=2.|height=0.5)\n",
+            "(@FC|ORIGIN|type_name=topFrontLeft|x=-2.|y=-1.|z=0.25)\n",
+        ]
+        stock = parser.parse_metadata(lines, unit_scale=unit_scale_to_mm("in")).stock
+
+        assert stock.width_mm == pytest.approx(101.6)
+        assert stock.length_mm == pytest.approx(50.8)
+        assert stock.height_mm == pytest.approx(12.7)
+        assert stock.offset_x_mm == pytest.approx(0.0)
+        assert stock.offset_y_mm == pytest.approx(0.0)
+        assert stock.offset_z_mm == pytest.approx(0.0)
 
 
 class TestToolDefinitionHelpers:
@@ -713,6 +1417,40 @@ class TestIconGeometry:
         assert height == 64
         opaque = sum(1 for i in range(3, len(buf), 4) if buf[i] > 0)
         assert opaque > 100
+
+    def test_thin_flute_keeps_gold_under_outline(self, monkeypatch):
+        """A hairline mill must stay gold; the outline must not overwrite the fill."""
+        from carveracontroller.addons.tool_visualization import icon_builder as ib
+
+        monkeypatch.setattr(ib, "_supersample_factor", lambda: 2)
+        monkeypatch.setattr(ib, "dp", lambda value: value)
+
+        tool_def = ToolDefinition(
+            number=2,
+            tool_type=ToolType.DRILL,
+            diameter=0.8,
+            shank_diameter=3.175,
+            flute_length=10.0,
+            taper_angle_deg=59.0,
+            length=38.0,
+        )
+        buf, width, height = ib._rasterize_icon(build_icon_geometry(tool_def), 34, 34)
+        assert (width, height) == (68, 68)
+
+        flute_rgba = ib._to_bytes_rgba(ib.icon_flute_color())
+        outline_rgba = ib._to_bytes_rgba(ib.icon_outline_color())
+
+        def _count(rgba):
+            n = 0
+            for i in range(0, len(buf), 4):
+                if tuple(buf[i : i + 4]) == rgba:
+                    n += 1
+            return n
+
+        flute_pixels = _count(flute_rgba)
+        outline_pixels = _count(outline_rgba)
+        assert flute_pixels > 100
+        assert outline_pixels > 50
 
     def test_outline_stroke_scales_with_density_and_supersampling(self, monkeypatch):
         """The stroke must follow the render scale or it becomes a hairline on HiDPI."""
@@ -1457,6 +2195,20 @@ class TestMeshBuilder:
         assert all(r <= flute_r + 1e-9 for _z, r in profile)
         assert not any(math.isclose(r, shank_r) for _z, r in profile)
 
+    def test_mesh_uses_the_current_theme_colors(self, monkeypatch):
+        theme = type("Theme", (), {})()
+        theme.viewer_tool_flute = (0.2, 0.4, 0.6, 0.8)
+        theme.viewer_tool_shank = (0.9, 0.1, 0.1, 0.5)
+        monkeypatch.setattr(
+            "carveracontroller.addons.tool_visualization.mesh_builder.get_theme",
+            lambda: theme,
+        )
+        tool_def = ToolDefinition(number=1, tool_type=ToolType.FLAT_END_MILL, diameter=6.0, length=40.0)
+        vertices, _indices, _fmt = build_tool_mesh(tool_def)
+        colors = {_vertex_color(vertices, index) for index in range(len(vertices) // FLOATS_PER_VERTEX)}
+        assert theme.viewer_tool_flute in colors
+        assert theme.viewer_tool_shank in colors
+
     def test_mesh_uses_flute_color_without_flute_length(self):
         # Stick-out under the 4×D fallback flute cap → entire mesh is flute-colored.
         tool_def = ToolDefinition(number=1, tool_type=ToolType.FLAT_END_MILL, diameter=6.0, length=18.0)
@@ -1464,7 +2216,7 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         for index in range(vertex_count):
-            assert _vertex_color(vertices, index) == pytest.approx(FLUTE_COLOR)
+            assert _vertex_color(vertices, index) == pytest.approx(flute_color())
 
     def test_missing_flute_capped_to_diameter_factor(self):
         diameter = 6.0
@@ -1480,15 +2232,15 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         colors = {_vertex_color(vertices, index) for index in range(vertex_count)}
-        assert FLUTE_COLOR in colors
-        assert SHANK_COLOR in colors
+        assert flute_color() in colors
+        assert shank_color() in colors
         for index in range(vertex_count):
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < flute_z - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > flute_z + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
         profile = tool_profile(tool_def)
         assert profile[-1][0] == pytest.approx(length)
@@ -1506,16 +2258,16 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         colors = {_vertex_color(vertices, index) for index in range(vertex_count)}
-        assert FLUTE_COLOR in colors
-        assert SHANK_COLOR in colors
+        assert flute_color() in colors
+        assert shank_color() in colors
 
         for index in range(vertex_count):
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < 12.0 - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > 12.0 + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
     def test_mesh_colors_flute_and_shoulder_when_no_handle_section(self):
         tool_def = ToolDefinition(
@@ -1531,16 +2283,16 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         colors = {_vertex_color(vertices, index) for index in range(vertex_count)}
-        assert FLUTE_COLOR in colors
-        assert SHANK_COLOR in colors
+        assert flute_color() in colors
+        assert shank_color() in colors
 
         for index in range(vertex_count):
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < 6.0 - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > 6.0 + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
     def test_infers_chamfer_flute_from_cone_when_metadata_missing(self):
         tool_def = ToolDefinition(
@@ -1554,15 +2306,15 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         colors = {_vertex_color(vertices, index) for index in range(vertex_count)}
-        assert FLUTE_COLOR in colors
-        assert SHANK_COLOR in colors
+        assert flute_color() in colors
+        assert shank_color() in colors
         for index in range(vertex_count):
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < 3.0 - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > 3.0 + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
     def test_inferred_flute_adds_short_shoulder_before_shank(self):
         """Fusion-like tip cue only: short body at D before the handle blend."""
@@ -1601,15 +2353,15 @@ class TestMeshBuilder:
         vertex_count = len(vertices) // FLOATS_PER_VERTEX
 
         colors = {_vertex_color(vertices, index) for index in range(vertex_count)}
-        assert FLUTE_COLOR in colors
-        assert SHANK_COLOR in colors
+        assert flute_color() in colors
+        assert shank_color() in colors
         for index in range(vertex_count):
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < ball_join - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > ball_join + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
     def test_explicit_flute_length_not_overridden_by_inference(self):
         tool_def = ToolDefinition(
@@ -1627,9 +2379,9 @@ class TestMeshBuilder:
             z = _vertex_z(vertices, index)
             color = _vertex_color(vertices, index)
             if z < 12.0 - 1e-6:
-                assert color == pytest.approx(FLUTE_COLOR)
+                assert color == pytest.approx(flute_color())
             elif z > 12.0 + 1e-6:
-                assert color == pytest.approx(SHANK_COLOR)
+                assert color == pytest.approx(shank_color())
 
     def test_missing_lengths_still_use_diameter_factor(self):
         profile = tool_profile(
@@ -1728,16 +2480,21 @@ class TestMeshBuilder:
 
 
 class TestExtractor:
-    def test_extract_tool_table_returns_first_non_empty_parser_result(self):
+    def test_extract_returns_first_non_empty_parser_result(self):
         lines = ["(T1  End mill  D=6 CR=0 - flat end mill)\n", "G0 X0\n"]
-        table = extract_tool_table(lines)
+        metadata = extract_cam_metadata(lines)
 
-        assert 1 in table
-        assert table[1].tool_type == ToolType.FLAT_END_MILL
+        assert metadata.parser_name == "fusion360_makera"
+        assert 1 in metadata.tool_table
+        assert metadata.tool_table[1].tool_type == ToolType.FLAT_END_MILL
+        assert metadata.stock is None
 
-    def test_extract_tool_table_returns_empty_dict_when_unrecognised(self):
-        lines = ["G0 X0 Y0\n", "G1 X1 F100\n"]
-        assert extract_tool_table(lines) == {}
+    def test_extract_returns_empty_metadata_when_unrecognised(self):
+        metadata = extract_cam_metadata(["G0 X0 Y0\n", "G1 X1 F100\n"])
+
+        assert metadata.parser_name is None
+        assert metadata.tool_table == {}
+        assert metadata.stock is None
 
     def test_extract_prefers_makera_studio_when_mkr_header_present(self):
         lines = [
@@ -1749,11 +2506,77 @@ class TestExtractor:
             "(T1  Should be ignored  D=99 CR=0 - flat end mill)\n",
             "G0 X0\n",
         ]
-        table = extract_tool_table(lines)
+        metadata = extract_cam_metadata(lines)
+        table = metadata.tool_table
 
+        assert metadata.parser_name == "makera_studio"
         assert table[1].diameter == 2.0
         assert table[1].shank_diameter == 3.175
         assert table[1].product_id == "1"
+        assert metadata.stock is None
+
+    def test_extract_includes_makera_studio_stock(self):
+        lines = [
+            ";@MKR|BEGIN\n",
+            ";@MKR|STOCK|id=cuboid|length=150|width=100|height=10|diameter=50\n",
+            ";@MKR|ORIGIN|id=0|type_name=topFrontLeft|x=-75|y=-50|z=5\n",
+            ";@MKR|END\n",
+            "G0 X0\n",
+        ]
+        metadata = extract_cam_metadata(lines)
+
+        assert metadata.parser_name == "makera_studio"
+        assert metadata.stock is not None
+        assert metadata.stock.kind == "rectangular"
+        assert metadata.stock.width_mm == 150.0
+        assert metadata.stock.xy_corner == "bl"
+
+    def test_extract_includes_fusion360_stock(self):
+        lines = [
+            "(T1  End mill  D=6 CR=0 - flat end mill)\n",
+            "(@F360|STOCK|id=box|width=200.|depth=35.|height=20.)\n",
+            "(@F360|ORIGIN|type_name=topFrontLeft|x=-100.|y=-17.5|z=10.)\n",
+            "G90\n",
+        ]
+        metadata = extract_cam_metadata(lines)
+
+        assert metadata.parser_name == "fusion360_makera"
+        assert 1 in metadata.tool_table
+        assert metadata.stock is not None
+        assert metadata.stock.kind == "rectangular"
+        assert metadata.stock.width_mm == 200.0
+        assert metadata.stock.xy_corner == "bl"
+
+    def test_extract_fusion360_stock_without_tools(self):
+        lines = [
+            "(@F360|STOCK|id=box|width=32.6|depth=32.6|height=4.)\n",
+            "(@F360|ORIGIN|type_name=topCenter|x=0.|y=0.|z=2.)\n",
+            "G90\n",
+        ]
+        metadata = extract_cam_metadata(lines)
+
+        assert metadata.parser_name == "fusion360_makera"
+        assert metadata.tool_table == {}
+        assert metadata.stock is not None
+        assert metadata.stock.xy_corner == "center"
+        assert metadata.stock.z_reference == "top"
+
+    def test_extract_scales_inch_fusion_stock_to_mm(self):
+        lines = [
+            "(@F360|STOCK|id=box|width=4.|depth=2.|height=0.5)\n",
+            "(@F360|ORIGIN|type_name=custom|x=-1.|y=0.|z=-0.1)\n",
+            "G90 G20\n",
+        ]
+        metadata = extract_cam_metadata(lines, unit_scale=unit_scale_to_mm("in"))
+
+        assert metadata.parser_name == "fusion360_makera"
+        stock = metadata.stock
+        assert stock is not None
+        assert stock.width_mm == pytest.approx(101.6)
+        assert stock.length_mm == pytest.approx(50.8)
+        assert stock.height_mm == pytest.approx(12.7)
+        assert stock.offset_x_mm == pytest.approx(25.4)
+        assert stock.offset_z_mm == pytest.approx(8.89)
 
     def test_extract_prefers_freecad_when_fc_header_present(self):
         lines = [
@@ -1763,8 +2586,45 @@ class TestExtractor:
             "(T1  Should be ignored  D=99 CR=0 - flat end mill)\n",
             "G0 X0\n",
         ]
-        table = extract_tool_table(lines)
+        metadata = extract_cam_metadata(lines)
+        table = metadata.tool_table
 
+        assert metadata.parser_name == "freecad_makera"
         assert table[1].diameter == 1.5
         assert table[1].shank_diameter == 3.175
         assert table[1].description == "FreeCAD flat"
+        assert metadata.stock is None
+
+    def test_extract_includes_freecad_stock(self):
+        lines = [
+            "(@FC|TOOL|number=1|name=Endmill|type=Endmill|diameter=5)\n",
+            "(@FC|STOCK|id=box|width=154.779|depth=79.996|height=110)\n",
+            "(@FC|ORIGIN|type_name=custom|x=-17.389|y=-14.998|z=50)\n",
+            "G90\n",
+        ]
+        metadata = extract_cam_metadata(lines)
+
+        assert metadata.parser_name == "freecad_makera"
+        assert 1 in metadata.tool_table
+        assert metadata.stock is not None
+        assert metadata.stock.kind == "rectangular"
+        assert metadata.stock.width_mm == pytest.approx(154.779)
+        assert metadata.stock.xy_corner == "center"
+        assert metadata.stock.z_reference == "top"
+        assert metadata.stock.offset_x_mm == pytest.approx(17.389)
+        assert metadata.stock.offset_y_mm == pytest.approx(14.998)
+        assert metadata.stock.offset_z_mm == pytest.approx(5.0)
+
+    def test_extract_freecad_stock_without_tools(self):
+        lines = [
+            "(@FC|STOCK|id=box|width=150|depth=100|height=10)\n",
+            "(@FC|ORIGIN|type_name=topFrontLeft|x=-75|y=-50|z=5)\n",
+            "G90\n",
+        ]
+        metadata = extract_cam_metadata(lines)
+
+        assert metadata.parser_name == "freecad_makera"
+        assert metadata.tool_table == {}
+        assert metadata.stock is not None
+        assert metadata.stock.xy_corner == "bl"
+        assert metadata.stock.z_reference == "top"

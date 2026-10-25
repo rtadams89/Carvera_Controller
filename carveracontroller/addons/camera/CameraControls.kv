@@ -17,13 +17,13 @@
     visible: False
     orientation: 'vertical'
     size_hint_y: None
-    height: '200dp' if self.visible else 0
+    height: ('276dp' if app.timelapse_status else '200dp') if self.visible else 0
     opacity: 1 if self.visible else 0
     padding: '8dp'
     spacing: '4dp'
     canvas.before:
         Color:
-            rgba: 0, 0, 0, 0.6
+            rgba: app.theme.overlay_strong
         Rectangle:
             pos: self.pos
             size: self.size
@@ -57,8 +57,28 @@
             height: self.parent.height
             on_release:
                 root.adjust_open = not root.adjust_open
+    CameraButtonSlot:
+        visible: app.camera_streaming and app.sd_videos_available
+        TransparentButton:
+            icon: 'data/file.png'
+            tooltip_txt: tr._('Browse videos')
+            size_hint: None, None
+            width: '50dp'
+            height: self.parent.height
+            on_release:
+                app.root.open_videos_browser()
     CameraAdjustPanel:
         visible: root.adjust_open and app.camera_streaming
+        Label:
+            text: app.timelapse_status_text
+            font_size: '13sp'
+            halign: 'left'
+            valign: 'top'
+            color: app.theme.text
+            size_hint_y: None
+            height: self.texture_size[1] if app.timelapse_status else 0
+            opacity: 1 if app.timelapse_status else 0
+            text_size: self.width, None
         BoxLayout:
             Label:
                 text: tr._('Resolution')

@@ -95,3 +95,6 @@ assets/packaging/ios/carveracontroller-ios/carveracontrollerpkg/*
 # Libraries for hidapi support that would normally be packaged
 carveracontroller/hidapi.dll
 carveracontroller/libhidapi.dylib
+
+# In-place native carve extension (built by scripts/build_native.py)
+carveracontroller/addons/stock/simulator/native/lib/

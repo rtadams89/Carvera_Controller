@@ -4,6 +4,8 @@ import os
 import re
 import types
 
+from carveracontroller.ui.themes import BASE_THEME, gcode_syntax_colors, load_palette
+
 logger = logging.getLogger(__name__)
 
 PARENPAT = re.compile(r"(\(.*?\))")
@@ -45,21 +47,8 @@ GCODE_TOKEN_RE = re.compile(
 
 M118_HIGHLIGHT_STOP = re.compile(r"[Mm]118(?!\.\d)\b")
 
-GCODE_DEFAULT_COLORS = {
-    "comment": "#6A9955",
-    "g_command": "#569CD6",
-    "m_command": "#C586C0",
-    "coordinate": "#CE9178",
-    "feedrate": "#4EC9B0",
-    "spindle": "#D16969",
-    "tool": "#B5CEA8",
-    "line_number": "#858585",
-    "parameter": "#9CDCFE",
-    "o_label": "#569CD6",
-    "o_keyword": "#DCDCAA",
-    "param_ref": "#B5CEA8",
-    "math_keyword": "#D7BA7D",
-}
+# Dark-theme syntax colors. Callers that have a live theme pass their own map.
+GCODE_DEFAULT_COLORS = gcode_syntax_colors(load_palette(BASE_THEME))
 
 
 def escape_gcode_markup(text):
@@ -135,6 +124,11 @@ def unit_scale_to_mm(unit):
 XY = 0
 XZ = 1
 YZ = 2
+
+# Detect off-axis Y (feed moves with max |Y| above the tolerancy threshold).
+# This is used by the stock simulator to determine the default carver mode of 4 axis jobs.
+OFF_AXIS_Y_TOL_MM = 1.0
+OFF_AXIS_Y_OUTLIER_FRAC = 0.05
 
 LASER_TOOL_NUMBER = 8888
 ZPROBE_TOOL_NUMBER = 0
@@ -259,6 +253,18 @@ class CNC:
         "OvSpindle": 100,
         "vacuummode": 0,
         "extoutmode": 0,
+        "autoblowmode": 0,
+        "autobedcleanmode": 0,
+        "ionizermode": 0,
+        # Z1 |E: timelapse suffix. tl_status is 1 only after a status report includes it.
+        "tl_status": 0,
+        "tl_transfer": 0,
+        "tl_requested": 0,
+        "tl_recording": 0,
+        "tl_sd_used": 0,
+        "tl_sd_total": 0,
+        "ota_phase": 0,
+        "ota_progress": 0,
         "_OvChanged": False,
         "_OvFeed": 100,  # Override target values
         "_OvRapid": 100,
@@ -363,6 +369,8 @@ class CNC:
         self.coordinates = []
         self.last_xyz = (-10000, -10000, -10000)
         self.has_motion = False
+        self.feed_move_count = 0
+        self.off_axis_y_count = 0
 
     # ----------------------------------------------------------------------
     def _safe_z_wcs(self):
@@ -402,11 +410,13 @@ class CNC:
         # calculate path
         xyzs = self.motionPath()
 
-        if len(xyzs) > 0 and not self.has_motion:
+        if not self.has_motion and self.gcode in (0, 1, 2, 3):
             # Parser assumes the machine starts at WCS origin; skip visualising
             # travel from that assumed position on the first motion command.
+            # A zero-length first move (e.g. G1 X0 Y0 already at origin) still
+            # counts, so the next real move is drawn instead of being collapsed.
             self.has_motion = True
-            if self.gcode in (0, 1, 2, 3):
+            if len(xyzs) > 0:
                 end = xyzs[-1]
                 if not self.z_command:
                     # Playback reaches clearance height (coordinate.clearance_z) before the first XY move.
@@ -414,7 +424,9 @@ class CNC:
                     end = (end[0], end[1], safe_z, end[3])
                     self.zval = safe_z
                 xyzs = [end]
-            elif self.gcode in (81, 82, 83, 85, 86, 89) and len(xyzs) > 1:
+        elif len(xyzs) > 0 and not self.has_motion:
+            self.has_motion = True
+            if self.gcode in (81, 82, 83, 85, 86, 89) and len(xyzs) > 1:
                 xyzs = xyzs[1:]
 
         if len(xyzs) > 0:
@@ -431,6 +443,7 @@ class CNC:
                             line_no,
                             self.tool,
                             self.feed,
+                            self.speed,
                         ]
                     )
                     # self.coordinates.append('X: {} Y: {} Z: {} A: {} Color: {} Line: {} Tool: {}'.format(
@@ -444,6 +457,7 @@ class CNC:
 
             if self.gcode != 0:
                 self.pathMargins(xyzs)
+            self._count_feed_y_axis(xyzs)
 
         # end motion
         self.motionEnd()
@@ -565,6 +579,7 @@ class CNC:
                 self.mval = int(value)
                 if self.mval == 321:
                     self.tool = LASER_TOOL_NUMBER
+                    self.speed = 0  # Laser S is different from mill RPM
 
             elif c == "N":
                 pass
@@ -647,18 +662,20 @@ class CNC:
 
         # Execute g-code
         if self.gcode in (0, 1):  # fast move or line
-            # If any axis is moving, interpolate all axes including A
             if self.dx != 0.0 or self.dy != 0.0 or self.dz != 0.0 or self.da != 0.0:
-                # Determine the number of interpolation steps based on the largest movement
-                max_delta = max(abs(self.dx), abs(self.dy), abs(self.dz), abs(self.da))
-                steps = max(int(max_delta / 0.5), 1)  # 0.5 is an arbitrary resolution, adjust as needed
-                for i in range(1, steps + 1):
-                    t = i / steps
-                    x = self.x + t * self.dx
-                    y = self.y + t * self.dy
-                    z = self.z + t * self.dz
-                    a = self.a + t * self.da
-                    xyz.append((x, y, z, a))
+                # 3-axis move: directly use target position
+                # A axis rotation: densify so the helix around X stays within the same sagitta budget as G2/G3 (CNC.accuracy).
+                if abs(self.da) < 1e-12:
+                    xyz.append((self.xval, self.yval, self.zval, self.aval))
+                else:
+                    steps = self._rotary_sagitta_steps()
+                    for i in range(1, steps + 1):
+                        t = i / steps
+                        x = self.x + t * self.dx
+                        y = self.y + t * self.dy
+                        z = self.z + t * self.dz
+                        a = self.a + t * self.da
+                        xyz.append((x, y, z, a))
 
         elif self.gcode in (2, 3):  # CW = 2, CCW = 3 circle
             uc, vc = self.motionCenter()
@@ -788,6 +805,23 @@ class CNC:
                 xyz.append((x, y, z, a))  # ???
         return xyz
 
+    def _rotary_sagitta_steps(self):
+        """Samples along ΔA so world-space helix sagitta stays within ``CNC.accuracy``"""
+        r = max(math.hypot(self.y, self.z), math.hypot(self.yval, self.zval), 1e-9)
+        da_rad = abs(math.radians(self.da))
+        try:
+            sagitta = 1.0 - CNC.accuracy / r
+        except ZeroDivisionError:
+            sagitta = 0.0
+        if 0.0 < sagitta < 1.0:
+            df = 2.0 * math.acos(sagitta)
+            df = min(df, math.pi / 4.0)
+        else:
+            df = math.pi / 4.0
+        if df < 1e-12:
+            df = math.pi / 4.0
+        return max(int(math.ceil(da_rad / df)), 1)
+
     # ----------------------------------------------------------------------
     # move to end position
     # ----------------------------------------------------------------------
@@ -837,6 +871,31 @@ class CNC:
             self.dx = 0
             self.dy = 0
             self.dz = drill - retract
+
+    # ----------------------------------------------------------------------
+    def _count_feed_y_axis(self, xyzs):
+        """Count 4-axis feed moves that leave Y=0 (index jobs vs wrapping)."""
+        if not self.has_4axis or self.gcode in (None, 0) or not xyzs:
+            return
+        self.feed_move_count += 1
+        if self.gcode in (2, 3):
+            max_abs_y = abs(self.y)
+            for xyz in xyzs:
+                ay = abs(xyz[1])
+                if ay > max_abs_y:
+                    max_abs_y = ay
+        else:
+            max_abs_y = max(abs(self.y), abs(self.yval))
+        if max_abs_y > OFF_AXIS_Y_TOL_MM:
+            self.off_axis_y_count += 1
+
+    @property
+    def has_off_axis_y(self):
+        """True when more than 5% of 4-axis feed moves left Y=0 (index vs wrapping)."""
+        n_feed = self.feed_move_count
+        if n_feed <= 0:
+            return False
+        return self.off_axis_y_count > OFF_AXIS_Y_OUTLIER_FRAC * n_feed
 
     # ----------------------------------------------------------------------
     def pathMargins(self, xyzs):

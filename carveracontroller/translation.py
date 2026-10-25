@@ -8,11 +8,16 @@ import locale
 import os
 
 from kivy.lang import Observable
+from kivy.utils import platform as kivy_platform
 
 LANGS = {
     "en": "English",
     "zh-CN": "中文简体(Simplified Chinese)",
 }
+
+# Regions and scripts that use Traditional Chinese. The only shipped Chinese
+# catalog is Simplified, so these fall back to English.
+_TRADITIONAL_CHINESE = {"hant", "tw", "hk", "mo"}
 
 
 class Lang(Observable):
@@ -75,19 +80,51 @@ _translator: Lang | None = Lang("en")
 tr = TrProxy()
 
 
+def supported_language_for_tag(tag: str | None) -> str | None:
+    """Map a locale or BCP 47 tag onto a shipped language key."""
+    if not tag:
+        return None
+    parts = tag.replace("_", "-").lower().split("-")
+    language = parts[0]
+    if language == "zh":
+        if {*parts[1:]} & _TRADITIONAL_CHINESE:
+            return None
+        return "zh-CN" if "zh-CN" in LANGS else None
+    for lang_key in LANGS:
+        if lang_key.split("-", 1)[0] == language:
+            return lang_key
+    return None
+
+
+def _android_language_tag() -> str | None:
+    """Device locale via the JVM default, which Android sets to the system language."""
+    try:
+        from jnius import autoclass
+    except ImportError:
+        return None
+    try:
+        return str(autoclass("java.util.Locale").getDefault().toLanguageTag())
+    except Exception:
+        return None
+
+
+def _posix_language_tag() -> str | None:
+    try:
+        lang, _ = locale.getlocale()
+    except Exception:
+        return None
+    return lang
+
+
+def default_language() -> str:
+    if kivy_platform == "android":
+        return supported_language_for_tag(_android_language_tag()) or "en"
+    return supported_language_for_tag(_posix_language_tag()) or "en"
+
+
 def init(langname: str | None = None):
-    if langname is None or langname not in LANGS:
-        try:
-            default_locale = locale.getdefaultlocale()
-            if default_locale is not None and default_locale[0] is not None:
-                for lang_key in LANGS:
-                    if default_locale[0][0:2] in lang_key:
-                        langname = lang_key
-                        break
-        except:
-            pass
-    if langname is None:
-        langname = "en"
+    if langname not in LANGS:
+        langname = default_language()
 
     global _translator
     _translator = Lang(langname)

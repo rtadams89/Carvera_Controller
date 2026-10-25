@@ -1,0 +1,463 @@
+#:import tr carveracontroller.__main__.tr
+#:import digitize_v carveracontroller.Utils.digitize_v
+#:import feature_switch_card_height carveracontroller.ui.config_run.feature_switch_card_height
+
+<CoordSetupCard>:
+    orientation: 'vertical'
+    checkbox: _cbx
+    summary_label: _summary
+    config_button: _config
+    line_input: _line
+    size_hint_y: None
+    height: 0 if self.collapsed else self.minimum_height
+    padding: dp(12), dp(10)
+    spacing: 0
+    opacity: 0 if self.collapsed else (0.5 if self.section_disabled else 1)
+    disabled: self.collapsed or self.section_disabled
+    canvas.before:
+        Color:
+            rgba: app.theme.panel_deep
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(6)]
+    BoxLayout:
+        size_hint_y: None
+        height: dp(32)
+        spacing: dp(8)
+        AnchorLayout:
+            size_hint_x: None
+            width: dp(16)
+            anchor_x: 'center'
+            anchor_y: 'center'
+            canvas:
+                Color:
+                    rgba: root.dot_rgba if root.show_dot else (0, 0, 0, 0)
+                Ellipse:
+                    pos: self.center_x - dp(5), self.center_y - dp(5)
+                    size: (dp(10), dp(10)) if root.show_dot else (0, 0)
+            Image:
+                source: root.icon if root.icon else 'data/close.png'
+                size_hint: None, None
+                size: (dp(16), dp(16)) if root.icon else (0, 0)
+                opacity: 1 if root.icon else 0
+                allow_stretch: True
+                keep_ratio: True
+                color: app.theme.icon
+        Button:
+            text: root.title_text
+            chrome: False
+            use_theme_text: False
+            background_normal: ''
+            background_down: ''
+            background_disabled_normal: ''
+            background_color: 0, 0, 0, 0
+            color: app.theme.text
+            font_size: dp(14)
+            halign: 'left'
+            valign: 'middle'
+            text_size: self.size
+            shorten: True
+            shorten_from: 'right'
+            on_release: root.toggle_checkbox()
+        CheckBox:
+            id: _cbx
+            size_hint: None, None
+            size: (dp(32), dp(32)) if root.show_checkbox else (0, 0)
+            opacity: 1 if root.show_checkbox else 0
+            disabled: root.checkbox_locked
+            pos_hint: {'center_y': 0.5}
+    Label:
+        id: _summary
+        size_hint_y: None
+        height: (self.texture_size[1] + dp(4)) if root.show_summary else 0
+        opacity: 1 if root.show_summary else 0
+        text_size: self.width, None
+        halign: 'left'
+        valign: 'top'
+        font_size: dp(13)
+        color: app.theme.text_muted if self.disabled else app.theme.text_secondary
+        disabled: root.summary_blocked or (root.show_checkbox and not _cbx.active)
+        shorten: False
+    BoxLayout:
+        size_hint_y: None
+        height: dp(34) if root.show_config else 0
+        opacity: 1 if root.show_config else 0
+        padding: 0, dp(6), 0, 0
+        Widget:
+        Button:
+            id: _config
+            text: tr._("Config")
+            font_size: dp(13)
+            size_hint: None, None
+            size: (dp(84), dp(28)) if root.show_config else (0, 0)
+            pos_hint: {'center_y': 0.5}
+            disabled: (not root.show_config) or root.config_blocked or (root.show_checkbox and not _cbx.active)
+    BoxLayout:
+        size_hint_y: None
+        height: dp(49) if root.show_line_field else 0
+        opacity: 1 if root.show_line_field else 0
+        padding: 0, dp(6), 0, dp(11)
+        spacing: dp(8)
+        Label:
+            text: tr._("Line:")
+            size_hint_x: None
+            width: self.texture_size[0]
+            font_size: dp(14)
+            color: app.theme.text
+            disabled_color: app.theme.text_muted
+            disabled: (not root.show_line_field) or (not _cbx.active) or _cbx.disabled
+        BoxLayout:
+            size_hint_x: None
+            width: dp(132)
+            canvas.before:
+                Color:
+                    rgba: app.theme.field_bg
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [dp(4)]
+            TextInput:
+                id: _line
+                hint_text: tr._('Number')
+                multiline: False
+                input_type: 'number'
+                input_filter: 'int'
+                font_size: dp(14)
+                padding: dp(8), dp(6)
+                cursor_color: app.theme.text
+                foreground_color: app.theme.text
+                disabled_foreground_color: app.theme.text_muted
+                background_color: 0, 0, 0, 0
+                background_normal: ''
+                background_active: ''
+                background_disabled_normal: ''
+                disabled: (not root.show_line_field) or (not _cbx.active) or _cbx.disabled
+
+<CoordPopup>:
+    size_hint: 0.8, 0.8
+    pos_hint: {'center_x': 0.5, 'center_y': 0.5}
+    auto_dismiss: False
+
+    cnc_workspace: cnc_workspace
+    lb_origin: origin_card.summary_label
+    lb_zprobe: zprobe_card.summary_label
+    lb_leveling: leveling_card.summary_label
+    btn_origin: origin_card.config_button
+    btn_zprobe: zprobe_card.config_button
+    btn_leveling: leveling_card.config_button
+    cbx_margin: margin_card.checkbox
+    cbx_zprobe: zprobe_card.checkbox
+    cbx_leveling: leveling_card.checkbox
+    cbx_startline: resume_card.checkbox
+    txt_startline: resume_card.line_input
+
+    BoxLayout:
+        orientation: 'vertical'
+        padding: dp(16), dp(14), dp(16), dp(16)
+        spacing: dp(10)
+        BoxLayout:
+            size_hint_y: None
+            height: dp(36)
+            spacing: dp(8)
+            Image:
+                source: 'data/cog.png'
+                color: app.theme.icon
+                size_hint: None, None
+                size: dp(22), dp(22)
+                pos_hint: {'center_y': 0.5}
+                allow_stretch: True
+                keep_ratio: True
+            Label:
+                text: tr._("Config and Run") if root.mode == 'Run' else tr._(" Config and Do ") + root.mode
+                bold: True
+                font_size: dp(18)
+                halign: 'left'
+                valign: 'middle'
+                text_size: self.size
+        BoxLayout:
+            orientation: 'vertical' if root.compact else 'horizontal'
+            spacing: dp(10)
+            BoxLayout:
+                orientation: 'vertical'
+                padding: dp(8)
+                size_hint_x: 1
+                size_hint_y: None if root.compact else 1
+                height: min(dp(220), max(dp(96), root.height * 0.28)) if root.compact else (self.parent.height if self.parent else dp(220))
+                canvas.before:
+                    Color:
+                        rgba: app.theme.panel_deep
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [dp(6)]
+                AnchorLayout:
+                    anchor_x: 'center'
+                    anchor_y: 'center'
+                    CNCWorkspace:
+                        id: cnc_workspace
+            ScrollView:
+                do_scroll_x: False
+                do_scroll_y: True
+                bar_width: dp(8)
+                scroll_type: ['bars', 'content']
+                size_hint_x: 1 if root.compact else None
+                width: (self.parent.width if self.parent else dp(280)) if root.compact else dp(280)
+                BoxLayout:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: dp(8)
+                    padding: 0, 0, dp(4), 0
+                    BoxLayout:
+                        id: background_section
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        spacing: dp(8) if feature_switches_card.height > 0 else 0
+                        BoxLayout:
+                            id: background_card
+                            orientation: 'vertical'
+                            size_hint_y: None
+                            height: self.padding[1] + self.padding[3] + dp(22) + dp(36)
+                            padding: dp(12), dp(10)
+                            spacing: 0
+                            canvas.before:
+                                Color:
+                                    rgba: app.theme.panel_deep
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [dp(6)]
+                            Label:
+                                text: tr._("Background:")
+                                size_hint_y: None
+                                height: dp(22)
+                                font_size: dp(13)
+                                color: app.theme.text_muted
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                            Spinner:
+                                id: background_image_spinner
+                                text: "None"
+                                size_hint_y: None
+                                height: dp(36)
+                                font_size: dp(14)
+                                on_text: root.update_background_image(self.text)
+                        BoxLayout:
+                            id: feature_switches_card
+                            orientation: 'vertical'
+                            size_hint_y: None
+                            padding: dp(12), dp(10)
+                            spacing: 0
+                            height: feature_switch_card_height(self.padding, vacuum_switch_row.height, extout_switch_row.height, autoblow_switch_row.height, autobedclean_switch_row.height, ionizer_switch_row.height, timelapse_switch_row.height)
+                            opacity: 1 if self.height > 0 else 0
+                            disabled: self.height == 0
+                            canvas.before:
+                                Color:
+                                    rgba: app.theme.panel_deep
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [dp(6)]
+                            BoxLayout:
+                                id: vacuum_switch_row
+                                size_hint_y: None
+                                height: dp(36) if app.model == 'C1' else 0
+                                opacity: 1 if app.model == 'C1' else 0
+                                disabled: app.model != 'C1'
+                                Label:
+                                    text: tr._("Auto Vacuum")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                Switch:
+                                    id: vacuum_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    active: True if root.vacuummode == 1 else False
+                                    on_active:
+                                        app.root.update_control('vacuum_mode', self.active)
+                            BoxLayout:
+                                id: extout_switch_row
+                                size_hint_y: None
+                                height: dp(36) if (app.is_community_firmware and app.fw_version_digitized >= digitize_v("2.2.0")) else 0
+                                opacity: 1 if (app.is_community_firmware and app.fw_version_digitized >= digitize_v("2.2.0")) else 0
+                                disabled: not (app.is_community_firmware and app.fw_version_digitized >= digitize_v("2.2.0"))
+                                Label:
+                                    text: tr._("Auto Ext. Out")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                ToolTipSwitch:
+                                    id: extout_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    tooltip_txt: tr._("Automatically toggles on/off the External Output pin. This can be used to control a vacuum or compressor")
+                                    set_flag: False
+                                    active: True if root.extoutmode == 1 else False
+                                    on_active:
+                                        if self.set_flag: self.set_flag = False
+                                        else: app.root.update_control('extout_mode', self.active)
+                            BoxLayout:
+                                id: autoblow_switch_row
+                                size_hint_y: None
+                                height: dp(36) if app.model == 'Z1' else 0
+                                opacity: 1 if app.model == 'Z1' else 0
+                                disabled: app.model != 'Z1'
+                                Label:
+                                    text: tr._("Auto Blow")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                ToolTipSwitch:
+                                    id: autoblow_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    tooltip_txt: tr._("The spindle fan will always run with this minimum power while the spindle is on.")
+                                    set_flag: False
+                                    active: True if root.autoblowmode == 1 else False
+                                    on_active:
+                                        if self.set_flag: self.set_flag = False
+                                        else: app.root.update_control('autoblow_mode', self.active)
+                            BoxLayout:
+                                id: autobedclean_switch_row
+                                size_hint_y: None
+                                height: dp(36) if app.model == 'Z1' else 0
+                                opacity: 1 if app.model == 'Z1' else 0
+                                disabled: app.model != 'Z1'
+                                Label:
+                                    text: tr._("Auto Bed Clean")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                ToolTipSwitch:
+                                    id: autobedclean_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    tooltip_txt: tr._("Runs a cleaning cycle when gcode playback finishes.")
+                                    set_flag: False
+                                    active: True if root.autobedcleanmode == 1 else False
+                                    on_active:
+                                        if self.set_flag: self.set_flag = False
+                                        else: app.root.update_control('autobedclean_mode', self.active)
+                            BoxLayout:
+                                id: ionizer_switch_row
+                                size_hint_y: None
+                                height: dp(36) if app.model == 'Z1' else 0
+                                opacity: 1 if app.model == 'Z1' else 0
+                                disabled: app.model != 'Z1'
+                                Label:
+                                    text: tr._("Ionizer")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                ToolTipSwitch:
+                                    id: ionizer_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    tooltip_txt: tr._("Turn on the static electricity removal unit on Z1.")
+                                    set_flag: False
+                                    active: True if root.ionizermode == 1 else False
+                                    on_active:
+                                        if self.set_flag: self.set_flag = False
+                                        else: app.root.update_control('ionizer_mode', self.active)
+                            BoxLayout:
+                                id: timelapse_switch_row
+                                size_hint_y: None
+                                height: dp(36) if app.model == 'Z1' else 0
+                                opacity: 1 if app.model == 'Z1' else 0
+                                disabled: app.model != 'Z1'
+                                Label:
+                                    text: tr._("Auto Timelapse")
+                                    halign: 'left'
+                                    valign: 'middle'
+                                    font_size: dp(13)
+                                    color: app.theme.text
+                                    text_size: self.size
+                                ToolTipSwitch:
+                                    id: timelapse_switch_play
+                                    size_hint_x: None
+                                    width: dp(80)
+                                    tooltip_txt: tr._("Record a timelapse to /sd/videos while a job is running.")
+                                    set_flag: False
+                                    active: True if root.timelapsemode == 1 else False
+                                    on_active:
+                                        if self.set_flag: self.set_flag = False
+                                        else: app.root.update_control('timelapse_record', self.active)
+                    CoordSetupCard:
+                        id: origin_card
+                        title_text: tr._(" Work Origin")
+                        dot_rgba: app.theme.map_origin
+                        show_checkbox: False
+                        checkbox_locked: True
+                        show_summary: True
+                        show_config: True
+                    CoordSetupCard:
+                        id: margin_card
+                        title_text: tr._(' Scan Margin')
+                        dot_rgba: app.theme.map_work_area
+                        show_summary: False
+                        show_config: False
+                        section_disabled: (root.mode != 'Run' and root.mode != 'Margin') or app.lasering
+                    CoordSetupCard:
+                        id: zprobe_card
+                        title_text: tr._(' Auto Z Probe')
+                        dot_rgba: app.theme.map_zprobe
+                        section_disabled: (root.mode != 'Run' and root.mode != 'ZProbe' and root.mode != 'Leveling') or app.lasering
+                        summary_blocked: (root.mode != 'Run' and root.mode != 'ZProbe' and root.mode != 'Leveling') or app.lasering
+                        config_blocked: (root.mode != 'Run' and root.mode != 'ZProbe' and root.mode != 'Leveling') or app.lasering or app.has_4axis
+                    CoordSetupCard:
+                        id: leveling_card
+                        title_text: tr._(' Auto Leveling')
+                        dot_rgba: app.theme.map_leveling
+                        section_disabled: (root.mode != 'Run' and root.mode != 'Leveling') or app.has_4axis or app.lasering
+                        summary_blocked: (root.mode != 'Run' and root.mode != 'Leveling') or app.has_4axis
+                        config_blocked: (root.mode != 'Run' and root.mode != 'Leveling') or app.has_4axis
+                    CoordSetupCard:
+                        id: resume_card
+                        title_text: tr._(" Resume File")
+                        show_dot: False
+                        icon: 'data/format-list-numbered.png'
+                        show_summary: False
+                        show_config: False
+                        show_line_field: True
+                        collapsed: root.mode != 'Run'
+        BoxLayout:
+            size_hint_y: None
+            height: dp(44)
+            spacing: dp(8)
+            Widget:
+            PopupActionButton:
+                size_hint_y: None
+                height: dp(40)
+                icon: 'data/close.png'
+                btn_text: tr._('Close')
+                flat: True
+                on_release: root.dismiss()
+            PopupActionButton:
+                id: config_run_action
+                size_hint_y: None
+                height: dp(40)
+                icon: 'data/play.png'
+                btn_text: tr._('Run') if root.mode == 'Run' else tr._('Do ') + root.mode
+                flat: True
+                primary: True
+                on_release:
+                    root.dismiss()
+                    if root.mode == 'Run': app.root.play(app.selected_remote_filename, root.txt_startline.text if root.cbx_startline.active else None)
+                    else: app.root.apply()
+                    app.root.content.transition.direction = 'right'
+                    app.root.content.current = 'File'
+                    app.root.cmd_manager.current = 'gcode_cmd_page'

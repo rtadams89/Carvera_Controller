@@ -21,6 +21,8 @@ from functools import partial
 from . import Utils
 from .CNC import CMDPAT, CNC, LASER_TOOL_NUMBER, PARENPAT, SEMIPAT, ZPROBE_TOOL_NUMBER
 from .protocols import MessageKind, ProtocolSession
+from .ui.tutorial.session import blocks_machine_io, demo_is_active
+from .USBBulkStream import USBBulkStream, is_usb_bulk_address
 from .USBStream import USBStream
 from .WIFIStream import WIFIStream
 
@@ -34,6 +36,8 @@ except ImportError:
 
 STREAM_POLL = 0.2  # s
 DIAGNOSE_POLL = 0.5  # s
+# If firmware never acks a Ctrl+Y with ^Y, allow a new $J -c after this.
+CONTINUOUS_JOG_STOP_TIMEOUT = 2.0  # s
 # Probe an idle transport on this cadence. A tight send loop must not ioctl every spin.
 LINK_CHECK_INTERVAL = 0.5  # s
 RX_BUFFER_SIZE = 128
@@ -80,6 +84,7 @@ LOAD_CONN_WIFI = 8
 
 SEND_FILE = 1
 
+
 CONN_USB = 0
 CONN_WIFI = 1
 
@@ -97,6 +102,7 @@ class Controller:
 
     stop = threading.Event()
     usb_stream = None
+    usb_bulk_stream = None
     wifi_stream = None
     stream = None
     modem = None
@@ -104,6 +110,7 @@ class Controller:
 
     def __init__(self, cnc, callback, log_sent_receive=False):
         self.usb_stream = USBStream(log_sent_receive)
+        self.usb_bulk_stream = USBBulkStream(log_sent_receive)
         self.wifi_stream = WIFIStream(log_sent_receive)
 
         # Reconnection properties
@@ -181,6 +188,7 @@ class Controller:
         self.diagnosing = False
 
         self.is_community_firmware = False
+        self._session_lights_applied = False
 
         # Connection-scoped comms protocol (detect on open; follows M485 switches)
         self.comms = ProtocolSession(on_change=self._on_comms_protocol_changed)
@@ -189,9 +197,10 @@ class Controller:
         self.jog_mode = Controller.JOG_MODE_STEP
         self.jog_speed = 10000  # mm/min. A value of 0 here would suggest to use last used feed
         self.continuous_jog_active = False
-        # True after Ctrl+Y until firmware acks (^Y) — suppresses keepalives without
-        # allowing a new $J -c to start before the previous jog has stopped.
-        self._continuous_jog_stopping = False
+        # Set on Ctrl+Y until firmware acks (^Y). Suppresses keepalives and
+        # blocks a new $J -c until the previous jog has stopped, or the stop
+        # request is older than CONTINUOUS_JOG_STOP_TIMEOUT.
+        self._continuous_jog_stop_requested_at = 0.0
 
     @property
     def protocol_ready(self):
@@ -201,6 +210,8 @@ class Controller:
         """Keep transports' file-transfer mode aligned with the comms session."""
         if self.usb_stream is not None:
             self.usb_stream.uses_framed_transfer = uses_framed_transfer
+        if self.usb_bulk_stream is not None:
+            self.usb_bulk_stream.uses_framed_transfer = uses_framed_transfer
         if self.wifi_stream is not None:
             self.wifi_stream.uses_framed_transfer = uses_framed_transfer
         if self.comms.ready:
@@ -235,6 +246,8 @@ class Controller:
     def executeCommand(self, line):
         # if self.sio_status != False or self.sio_diagnose != False:      #wait for the ? or * command
         #    time.sleep(0.5)
+        if blocks_machine_io(self.stream):
+            return
         if self.stream and line:
             try:
                 if isinstance(line, str) and not line.endswith("\n"):
@@ -268,6 +281,8 @@ class Controller:
 
     def executeRealtime(self, char):
         """Send a single-byte realtime control through the active protocol."""
+        if blocks_machine_io(self.stream):
+            return
         self.executeRealtimeSequence(char)
 
     def executeRealtimeSequence(self, *chars):
@@ -277,6 +292,8 @@ class Controller:
         ``1`` as separate writes races with other commands and leaves orphaned
         ``1`` bytes in the firmware command buffer (seen as ``111…$J …``).
         """
+        if blocks_machine_io(self.stream):
+            return
         if not self.stream or not chars:
             return
         try:
@@ -409,6 +426,13 @@ class Controller:
     #         cmd = "buffer " + cmd
     #     self.executeCommand(cmd)
 
+    def liftToClearance(self, buffer=False):
+        # only Z to coordinate.clearance_z (machine coordinates); XY stays where it is
+        cmd = "G90 G53 G0 Z%g\n" % CNC.vars["clearance_z"]
+        if buffer:
+            cmd = "buffer " + cmd
+        self.executeCommand(cmd)
+
     def gotoClearance(self, buffer=False):
         cmd = "M496.1\n"
         if buffer:
@@ -522,6 +546,32 @@ class Controller:
         else:
             self.executeCommand("M822\n")
 
+    def _auto_lights_enabled(self):
+        if App is None:
+            return False
+        try:
+            from kivy.config import Config
+
+            return Config.getboolean("carvera", "auto_lights_on_connect", fallback=False)
+        except Exception:
+            return False
+
+    def apply_session_lights(self, turn_on, *, enabled=None):
+        """Turn enclosure light on at connect or off before disconnect."""
+        if turn_on and self._session_lights_applied:
+            return
+        if enabled is None:
+            enabled = self._auto_lights_enabled()
+        if not enabled:
+            # Remember that this session already decided, so connect is not retried.
+            if turn_on:
+                self._session_lights_applied = True
+            return
+        if self.stream is None:
+            return
+        self.setLightSwitch(turn_on)
+        self._session_lights_applied = turn_on
+
     def setExternalControl(self, pwm=100):
         if pwm > 0:
             self.executeCommand("M851 S%g\n" % (pwm))
@@ -557,6 +607,35 @@ class Controller:
             self.executeCommand("M331.3\n")
         else:
             self.executeCommand("M332.3\n")
+
+    def setAutoBlowMode(self, mode):
+        CNC.vars["autoblowmode"] = 1 if mode else 0
+        if mode:
+            self.executeCommand("M331.1\n")
+        else:
+            self.executeCommand("M332.1\n")
+
+    def setAutoBedCleanMode(self, mode):
+        CNC.vars["autobedcleanmode"] = 1 if mode else 0
+        if mode:
+            self.executeCommand("M331.2\n")
+        else:
+            self.executeCommand("M332.2\n")
+
+    def setIonizerMode(self, mode):
+        CNC.vars["ionizermode"] = 1 if mode else 0
+        if mode:
+            self.executeCommand("M331.4\n")
+        else:
+            self.executeCommand("M332.4\n")
+
+    def setTimelapseRecord(self, mode):
+        """Enable or disable auto timelapse recording on the Z1. Capture starts once the machine is running."""
+        CNC.vars["tl_requested"] = 1 if mode else 0
+        if mode:
+            self.executeCommand("M951\n")
+        else:
+            self.executeCommand("M952\n")
 
     def setLaserMode(self, mode):
         if mode:
@@ -1448,6 +1527,31 @@ class Controller:
         if "H" in d:
             CNC.vars["halt_reason"] = int(d["H"][0])
 
+        # Z1 status suffix: |E:transfer,record-requested,recording,sd-used,sd-total|OTA:phase,progress
+        e_fields = d.get("E")
+        if e_fields is not None and len(e_fields) >= 5:
+            CNC.vars["tl_status"] = 1
+            CNC.vars["tl_transfer"] = int(e_fields[0])
+            CNC.vars["tl_requested"] = int(e_fields[1])
+            CNC.vars["tl_recording"] = int(e_fields[2])
+            CNC.vars["tl_sd_used"] = int(e_fields[3])
+            CNC.vars["tl_sd_total"] = int(e_fields[4])
+        else:
+            CNC.vars["tl_status"] = 0
+            CNC.vars["tl_transfer"] = 0
+            CNC.vars["tl_requested"] = 0
+            CNC.vars["tl_recording"] = 0
+            CNC.vars["tl_sd_used"] = 0
+            CNC.vars["tl_sd_total"] = 0
+
+        ota_fields = d.get("OTA")
+        if ota_fields is not None and len(ota_fields) >= 2:
+            CNC.vars["ota_phase"] = int(ota_fields[0])
+            CNC.vars["ota_progress"] = int(ota_fields[1])
+        else:
+            CNC.vars["ota_phase"] = 0
+            CNC.vars["ota_progress"] = 0
+
         self.posUpdate = True
 
     def parseBigParentheses(self, line):
@@ -1526,10 +1630,8 @@ class Controller:
         if self.stream is None and self.thread is None:
             return
         self.stopRun()
-        thread = self.thread
-        self.thread = None
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=1.0)
+        self._join_stream_io()
+        self.apply_session_lights(False)
         if self.stream is not None:
             try:
                 self.stream.close()
@@ -1539,9 +1641,31 @@ class Controller:
         self.comms.reset()
         self.clearRun()
 
+    def _join_stream_io(self):
+        thread = self.thread
+        self.thread = None
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def _usb_transport_for_address(self, address):
+        if is_usb_bulk_address(address):
+            return self.usb_bulk_stream
+        return self.usb_stream
+
+    def _connection_method_label(self, conn_type=None, address=None):
+        if conn_type is None:
+            conn_type = self.connection_type
+        if address is None:
+            address = self.connection_address
+        if conn_type == CONN_USB:
+            return "USB" if is_usb_bulk_address(address) else "USB serial"
+        return "WiFi"
+
     def open(self, conn_type, address):
+        if demo_is_active():
+            return False
         # init connection
-        method = "USB serial" if conn_type == CONN_USB else "WiFi"
+        method = self._connection_method_label(conn_type, address)
         # Single user-visible connect log (monitorSerial emits one MDI Received line).
         self.log.put((self.MSG_NORMAL, f"Connecting via {method}: {address}"))
 
@@ -1554,7 +1678,7 @@ class Controller:
         # Keep self.stream unset until open + protocol detect finish so heartbeat
         # cannot treat a half-open link as a live connection and tear it down.
         if conn_type == CONN_USB:
-            transport = self.usb_stream
+            transport = self._usb_transport_for_address(address)
             self._baud_upgrade_attempted = False
         else:
             transport = self.wifi_stream
@@ -1563,13 +1687,19 @@ class Controller:
             # Switching WiFi ↔ USB (or reconnecting) must tear down the old link first.
             self._close_existing_connection()
 
-            if not transport.open(address):
+            try:
+                opened = transport.open(address)
+            except Exception as exc:
+                self.log.put((self.MSG_ERROR, str(exc)))
+                raise
+
+            if not opened:
                 self.log.put((self.MSG_ERROR, "Connection Failed!"))
                 return False
 
-            if conn_type == CONN_USB:
-                # USB open toggles DTR and resets the machine; wait for firmware boot
-                # before protocol probe / status polling.
+            if conn_type == CONN_USB and getattr(transport, "resets_on_open", True):
+                # USB serial open toggles DTR and resets the machine; wait for firmware boot
+                # before protocol probe / status polling. Vendor bulk USB does not reset.
                 time.sleep(2.0)
 
             CNC.vars["state"] = CONNECTED
@@ -1580,6 +1710,7 @@ class Controller:
             CNC.vars["alarm_message"] = ""
             # Reset manual disconnect flag when connection is established
             self._manual_disconnect = False
+            self._session_lights_applied = False
             try:
                 self.clearRun()
             except Exception:
@@ -1589,8 +1720,12 @@ class Controller:
             self.thread = threading.Thread(target=self.streamIO)
             self.thread.start()
             self._refresh_heartbeat = True
-            # USB needs a longer post-reset grace; WiFi is usually ready immediately.
-            self._heartbeat_grace_until = time.time() + (20.0 if conn_type == CONN_USB else 5.0)
+            # USB serial needs a longer post-reset grace; bulk USB and WiFi are ready sooner.
+            if conn_type == CONN_USB and getattr(transport, "resets_on_open", True):
+                grace = 20.0
+            else:
+                grace = 5.0
+            self._heartbeat_grace_until = time.time() + grace
             return True
         finally:
             self._connecting = False
@@ -1606,8 +1741,8 @@ class Controller:
         except Exception:
             self.log.put((self.MSG_ERROR, "Controller stop thread error!"))
         self._runLines = 0
-        time.sleep(0.5)
-        self.thread = None
+        self._join_stream_io()
+        self.apply_session_lights(False)
         try:
             self.stream.close()
         except Exception:
@@ -1624,7 +1759,7 @@ class Controller:
         """Close connection manually (user initiated) - don't auto-reconnect"""
         if self.stream is None:
             return
-        method = "USB serial" if self.connection_type == CONN_USB else "WiFi"
+        method = self._connection_method_label()
         address = self.connection_address or "unknown"
         self.log.put((self.MSG_NORMAL, f"Disconnected via {method}: {address}"))
         try:
@@ -1632,8 +1767,8 @@ class Controller:
         except Exception:
             self.log.put((self.MSG_ERROR, "Controller stop thread error!"))
         self._runLines = 0
-        time.sleep(0.5)
-        self.thread = None
+        self._join_stream_io()
+        self.apply_session_lights(False)
         try:
             self.stream.close()
         except Exception:
@@ -1688,6 +1823,8 @@ class Controller:
     # WARNING: it has to be a single line!
     # ----------------------------------------------------------------------
     def sendGCode(self, cmd):
+        if blocks_machine_io(self.stream):
+            return
         self.executeCommand(cmd)
 
     # ----------------------------------------------------------------------
@@ -1700,7 +1837,7 @@ class Controller:
         if self.loadNUM == 0 and self.sendNUM == 0:
             if self.stream is None or not self.protocol_ready:
                 return
-            if self.continuous_jog_active and not self._continuous_jog_stopping:
+            if self.continuous_jog_active and not self._continuous_jog_stop_requested_at:
                 # Smoothie uses "?1"; Makera uses "?" + Ctrl+Z keepalive.
                 # Always one write so keepalive can't be interleaved/orphaned.
                 if self.comms.uses_framed_transfer:
@@ -1715,8 +1852,8 @@ class Controller:
         if self.loadNUM == 0 and self.sendNUM == 0:
             if self.stream is None or not self.protocol_ready:
                 return
-            self.executeCommand("diagnose\n")
             self.sio_diagnose = sio_diagnose
+            self.executeCommand("diagnose\n")
 
     # ----------------------------------------------------------------------
     def hardReset(self):
@@ -1794,16 +1931,19 @@ class Controller:
                 self.stopContinuousJog()
             self.jog_mode = mode
 
+    def continuousJogBusy(self):
+        """True while a continuous jog is running or a recent stop is waiting for ^Y."""
+        if self._continuous_jog_stop_requested_at and (
+            time.monotonic() - self._continuous_jog_stop_requested_at > CONTINUOUS_JOG_STOP_TIMEOUT
+        ):
+            self._clear_continuous_jog_state()
+        return bool(self.continuous_jog_active or self._continuous_jog_stop_requested_at)
+
     def startContinuousJog(self, _dir, speed=None, scale_feed_override=None):
         """Start continuous jogging in the specified direction"""
-        if (
-            self.jog_mode != Controller.JOG_MODE_CONTINUOUS
-            or self.continuous_jog_active
-            or self._continuous_jog_stopping
-        ):
+        if self.continuousJogBusy() or self.jog_mode != Controller.JOG_MODE_CONTINUOUS:
             return
         self.continuous_jog_active = True
-        self._continuous_jog_stopping = False
         if speed is None:
             if self.jog_speed > 0 and self.jog_speed < 10000:
                 self.executeCommand(f"$J -c {_dir} F{self.jog_speed}")
@@ -1824,13 +1964,13 @@ class Controller:
         # Send Ctrl+Y, then wait for firmware ^Y before allowing a new $J -c.
         # Mark stopping immediately so status polls stop sending keepalives that
         # would otherwise fight the stop request.
-        if self.stream is not None and self.continuous_jog_active and not self._continuous_jog_stopping:
-            self._continuous_jog_stopping = True
+        if self.stream is not None and self.continuous_jog_active and not self._continuous_jog_stop_requested_at:
+            self._continuous_jog_stop_requested_at = time.monotonic()
             self.executeRealtime(0x19)
 
     def _clear_continuous_jog_state(self):
         self.continuous_jog_active = False
-        self._continuous_jog_stopping = False
+        self._continuous_jog_stop_requested_at = 0.0
 
     def jog(self, _dir, speed=None):
         if self.jog_mode == Controller.JOG_MODE_STEP:
@@ -1971,6 +2111,11 @@ class Controller:
 
     def _flush_rx(self):
         """Discard any unread host RX bytes and reset the protocol parser."""
+        if self.stream is not None and hasattr(self.stream, "reset_input_buffer"):
+            try:
+                self.stream.reset_input_buffer()
+            except Exception:
+                pass
         serial_port = getattr(self.stream, "serial", None) if self.stream else None
         if serial_port is not None:
             try:
@@ -2084,9 +2229,6 @@ class Controller:
                     if msg:
                         CNC.vars["alarm_message"] = msg
             else:
-                # Firmware continuous-jog timeout: clear local state so jogging can restart.
-                if "Stop request timeout" in line or "Internal stop request reset" in line:
-                    self._clear_continuous_jog_state()
                 self.log.put((self.MSG_NORMAL, line))
         except (LookupError, ArithmeticError, ValueError) as e:
             self.log.put((self.MSG_ERROR, f"Failed to parse machine response: {line}"))

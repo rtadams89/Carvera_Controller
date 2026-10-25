@@ -23,6 +23,7 @@ from kivy.uix.spinner import Spinner
 
 from carveracontroller.CNC import CNC
 from carveracontroller.Controller import Controller
+from carveracontroller.documentation import resolve_documentation_url
 from carveracontroller.translation import tr
 
 from . import gamepad as gamepad_module
@@ -265,7 +266,7 @@ if WHB04_SUPPORTED:
             # closely as possible. We choose some reasonably high speed here,
             # the machine will limit itself to the maximum speed it can handle.
             if self._controller.jog_mode == self._controller.JOG_MODE_CONTINUOUS:
-                if not self._controller.continuous_jog_active:
+                if self._is_jogging_enabled() and not self._controller.continuousJogBusy():
                     if feed > 0 and self._controller.jog_speed < 10000:
                         if axis == "Z":
                             feed = min(800 * daemon.step_size_value, feed)
@@ -383,11 +384,14 @@ if WHB04_SUPPORTED:
                     self._update_ui_on_jog_stop()
 
         def _handle_permission_error(self, daemon: whb04.Daemon) -> None:
+            docs_url = resolve_documentation_url(
+                "https://carvera-community.gitbook.io/docs/controller/features/pendant-support#linux"
+            )
             message = (
                 "The WHB04 pendant was found but cannot be opened due to\n"
                 "insufficient permissions on the USB HID device.\n\n"
                 "See the documentation on how to fix these permissions on Linux:\n"
-                "https://carvera-community.gitbook.io/docs/controller/features/pendant-support#linux"
+                f"{docs_url}"
             )
             print(f"\nERROR: {message}\n", flush=True)
 
@@ -553,7 +557,7 @@ class GamepadPendant(Pendant):
         ):
             self._controller.stopContinuousJog()
 
-        if self._controller.continuous_jog_active:
+        if self._controller.continuousJogBusy():
             return
 
         feed = self._continuous_feed_for_axis(axis)

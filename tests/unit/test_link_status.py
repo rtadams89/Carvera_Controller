@@ -7,6 +7,7 @@ import pytest
 import serial
 
 from carveracontroller.Controller import Controller
+from carveracontroller.USBBulkStream import USBBulkStream
 from carveracontroller.USBStream import USBStream
 from carveracontroller.WIFIStream import _LINK_LOSS_SEC, _TCP_RXT_CONNDROPTIME_DARWIN, WIFIStream
 
@@ -121,6 +122,66 @@ def test_usb_open_port_is_up_and_unplug_is_down():
 
     stream.serial = _Serial(error=serial.SerialException("device gone"))
     assert stream.is_link_up() is False
+
+
+def test_usb_bulk_open_device_is_up_and_unplug_is_down():
+    stream = USBBulkStream.__new__(USBBulkStream)
+    stream.dev = None
+    stream.ep_in = None
+    stream._stop = False
+    stream._rx_buf = bytearray()
+    assert stream.is_link_up() is False
+
+    class _Ep:
+        bEndpointAddress = 0x81
+        wMaxPacketSize = 64
+
+    class _Dev:
+        def __init__(self, result):
+            self.result = result
+
+        def read(self, *_args, **_kwargs):
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    stream.ep_in = _Ep()
+    stream.dev = _Dev(b"")
+    assert stream.is_link_up() is True
+
+    stream.dev = _Dev(b"?")
+    assert stream.is_link_up() is True
+    assert stream._rx_buf == b"?"
+
+    stream._rx_buf.clear()
+    stream.dev = _Dev(OSError(-7, "timeout"))
+    assert stream.is_link_up() is True
+
+    stream.dev = _Dev(OSError(19, "No such device"))
+    assert stream.is_link_up() is False
+
+    stream._stop = True
+    stream.dev = _Dev(b"")
+    assert stream.is_link_up() is False
+
+
+def test_usb_bulk_probe_does_not_swallow_programming_errors():
+    stream = USBBulkStream.__new__(USBBulkStream)
+    stream._stop = False
+    stream._rx_buf = bytearray()
+
+    class _Ep:
+        bEndpointAddress = 0x81
+        wMaxPacketSize = 64
+
+    class _Broken:
+        def read(self, *_args, **_kwargs):
+            raise AttributeError("no ioctl")
+
+    stream.ep_in = _Ep()
+    stream.dev = _Broken()
+    with pytest.raises(AttributeError):
+        stream.is_link_up()
 
 
 def test_usb_probe_does_not_swallow_programming_errors():
