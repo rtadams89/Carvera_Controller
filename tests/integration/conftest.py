@@ -14,6 +14,8 @@ import time
 # real Kivy config. Must be set BEFORE any Kivy import.
 _kivy_home = tempfile.mkdtemp(prefix="kivy_test_")
 os.environ["KIVY_HOME"] = _kivy_home
+# App JSON must not fall through to the real user-data dir (or migrate ~/.kivy).
+os.environ["APP_USER_DATA_DIR"] = os.path.join(_kivy_home, "user_data")
 os.environ.setdefault("KIVY_NO_FILELOG", "1")
 os.environ.setdefault("KIVY_LOG_MODE", "MIXED")
 os.environ.setdefault("KIVY_NO_CONSOLELOG", "0")

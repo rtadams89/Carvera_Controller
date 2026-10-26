@@ -13,6 +13,8 @@ _kivy_home = tempfile.mkdtemp(prefix="kivy_unit_test_")
 os.environ.setdefault("KIVY_HOME", _kivy_home)
 os.environ.setdefault("KIVY_NO_FILELOG", "1")
 os.environ.setdefault("KIVY_NO_CONSOLELOG", "1")
+# App JSON must not fall through to the real user-data dir (or migrate ~/.kivy).
+os.environ["APP_USER_DATA_DIR"] = os.path.join(_kivy_home, "user_data")
 
 import pytest  # noqa: E402
 
